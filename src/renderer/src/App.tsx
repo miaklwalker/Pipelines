@@ -1,4 +1,4 @@
-import { useCallback, useState, useRef, useEffect } from 'react'
+import { useCallback, useState, useRef, useEffect, useMemo } from 'react'
 import {
   ReactFlow,
   Background,
@@ -50,6 +50,32 @@ function nextPosition() {
   const x = 260 + Math.floor(nodeCounter / 5) * 340
   nodeCounter++
   return { x, y }
+}
+
+// ── Upstream edge distance BFS ────────────────────────────────────────────────
+// Returns a map of edgeId → depth (0 = direct input to nodeId, 1 = one step up, …)
+function getUpstreamEdgeDistances(nodeId: string, edges: AppEdge[]): Map<string, number> {
+  const edgeDist = new Map<string, number>()
+  const visitedNodes = new Set<string>([nodeId])
+  let frontier = [nodeId]
+  let depth = 0
+  while (frontier.length > 0) {
+    const next: string[] = []
+    for (const tid of frontier) {
+      for (const e of edges) {
+        if (e.target === tid && !edgeDist.has(e.id)) {
+          edgeDist.set(e.id, depth)
+          if (!visitedNodes.has(e.source)) {
+            visitedNodes.add(e.source)
+            next.push(e.source)
+          }
+        }
+      }
+    }
+    frontier = next
+    depth++
+  }
+  return edgeDist
 }
 
 // ── Column propagation through the graph ─────────────────────────────────────
@@ -343,6 +369,20 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [saveProject, loadProject])
 
+  // ── Display edges: dim unrelated, animate + fade upstream on node select ─────
+  const displayEdges = useMemo(() => {
+    if (!previewNodeId) return edges
+    const upstream = getUpstreamEdgeDistances(previewNodeId, edges)
+    return edges.map((edge) => {
+      const base = edge.className ?? ''
+      if (upstream.has(edge.id)) {
+        const d = Math.min(upstream.get(edge.id)!, 3)
+        return { ...edge, className: `${base} edge-upstream-${d}`, animated: true }
+      }
+      return { ...edge, className: `${base} edge-dim`, animated: false }
+    })
+  }, [edges, previewNodeId])
+
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="app-layout">
@@ -374,7 +414,7 @@ export default function App() {
         <div className="canvas-wrap">
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={displayEdges}
             nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
