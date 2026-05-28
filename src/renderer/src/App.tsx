@@ -23,6 +23,7 @@ import type {
   AppNode, AppEdge,
   CSVNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
+  UniqueNodeData, MapValueData, ConditionalOutputData,
   PreviewResult,
 } from './lib/types'
 
@@ -131,7 +132,14 @@ function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
       return { ...node, data: { ...node.data, inputColumns: inputCols } }
     }
 
-    if (node.type === 'static-value' || node.type === 'increment-value') {
+    if (node.type === 'unique') {
+      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
+      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
+      return { ...node, data: { ...node.data, inputColumns: inputCols } }
+    }
+
+    if (node.type === 'static-value' || node.type === 'increment-value'
+      || node.type === 'map-value' || node.type === 'conditional-output') {
       const hasAnchor = edges.some((e) => e.target === node.id && e.targetHandle === 'anchor-in')
       return { ...node, data: { ...node.data, hasAnchor } }
     }
@@ -150,8 +158,11 @@ function nodeLabel(node: AppNode | undefined): string {
   if (node.type === 'csv-output')  return 'CSV Export'
   if (node.type === 'merge')           return 'Merge'
   if (node.type === 'filter')          return 'Filter'
-  if (node.type === 'static-value')    return 'Static Value'
-  if (node.type === 'increment-value') return 'Increment'
+  if (node.type === 'static-value')        return 'Static Value'
+  if (node.type === 'increment-value')     return 'Increment'
+  if (node.type === 'unique')              return 'Unique'
+  if (node.type === 'map-value')           return (node.data as MapValueData).columnName || 'Map'
+  if (node.type === 'conditional-output')  return (node.data as ConditionalOutputData).columnName || 'Conditional'
   return ''
 }
 
@@ -235,6 +246,9 @@ export default function App() {
     return (srcRow && tgtRow) || (srcCol && tgtCol)
   }, [])
 
+  // ── Canvas click → clear selection ───────────────────────────────────────
+  const onPaneClick = useCallback(() => setPreviewNodeId(null), [])
+
   // ── Node click → preview ──────────────────────────────────────────────────
   const onNodeClick = useCallback((_: React.MouseEvent, node: AppNode) => {
     const sql = buildNodeSQL(node.id, nodesRef.current, edgesRef.current)
@@ -313,6 +327,24 @@ export default function App() {
         setNodes((ns) => [...ns, {
           id: uuid(), type: 'increment-value', position: nextPosition(),
           data: { columnName: 'index', startAt: 1, hasAnchor: false } satisfies IncrementValueData,
+        }])
+        break
+      case 'unique':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'unique', position: nextPosition(),
+          data: { keyColumn: '', keep: 'first', inputColumns: [] } satisfies UniqueNodeData,
+        }])
+        break
+      case 'map-value':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'map-value', position: nextPosition(),
+          data: { columnName: 'mapped', sourceColumn: '', mappings: [], hasAnchor: false } satisfies MapValueData,
+        }])
+        break
+      case 'conditional-output':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'conditional-output', position: nextPosition(),
+          data: { columnName: 'result', conditions: [], fallback: '', hasAnchor: false } satisfies ConditionalOutputData,
         }])
         break
     }
@@ -420,6 +452,7 @@ export default function App() {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
+            onPaneClick={onPaneClick}
             isValidConnection={isValidConnection}
             fitView
             fitViewOptions={{ padding: 0.2 }}

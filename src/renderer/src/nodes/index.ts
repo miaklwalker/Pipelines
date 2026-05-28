@@ -9,6 +9,9 @@ import './MergeNode'
 import './FilterNode'
 import './StaticValueNode'
 import './IncrementValueNode'
+import './UniqueNode'
+import './MapValueNode'
+import './ConditionalOutputNode'
 
 // Build the stable ReactFlow nodeTypes map once, after all nodes are registered.
 import { buildNodeTypes } from './registry'

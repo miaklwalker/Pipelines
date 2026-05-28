@@ -2,6 +2,7 @@ import type {
   AppNode, AppEdge,
   CSVNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
+  UniqueNodeData, MapValueData, ConditionalOutputData,
   ColumnInfo,
 } from './types'
 
@@ -14,13 +15,17 @@ function escapePath(p: string): string {
  * SQL expression it emits (no FROM clause — just the scalar expression).
  * Returns null for non-emitter nodes.
  */
+function sqlStr(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`
+}
+
 function emitterExpression(nodeId: string, nodes: AppNode[]): string | null {
   const node = nodes.find((n) => n.id === nodeId)
   if (!node) return null
 
   if (node.type === 'static-value') {
     const d = node.data as StaticValueData
-    return `'${(d.value ?? '').replace(/'/g, "''")}'`
+    return sqlStr(d.value ?? '')
   }
 
   if (node.type === 'increment-value') {
@@ -29,6 +34,25 @@ function emitterExpression(nodeId: string, nodes: AppNode[]): string | null {
     return start === 1
       ? `ROW_NUMBER() OVER ()`
       : `ROW_NUMBER() OVER () + ${start - 1}`
+  }
+
+  if (node.type === 'map-value') {
+    const d = node.data as MapValueData
+    if (!d.sourceColumn || !d.mappings?.length) return null
+    const cases = d.mappings
+      .filter((m) => m.from !== '')
+      .map((m) => `WHEN ${sqlStr(m.from)} THEN ${sqlStr(m.to)}`)
+      .join(' ')
+    return cases ? `CASE "${d.sourceColumn}" ${cases} ELSE NULL END` : null
+  }
+
+  if (node.type === 'conditional-output') {
+    const d = node.data as ConditionalOutputData
+    const branches = (d.conditions ?? []).filter((c) => c.condition.trim())
+    if (!branches.length) return null
+    const cases = branches.map((c) => `WHEN (${c.condition}) THEN ${sqlStr(c.output)}`).join(' ')
+    const fallback = d.fallback ? sqlStr(d.fallback) : 'NULL'
+    return `CASE ${cases} ELSE ${fallback} END`
   }
 
   return null
@@ -202,6 +226,44 @@ export function buildNodeSQL(
       return `SELECT ${expr} AS "${colName}"`
     }
 
+    case 'unique': {
+      const d = node.data as UniqueNodeData
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      if (!inputEdge) return null
+      const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+      if (!inputSQL || !d.keyColumn) return null
+      const order = d.keep === 'last' ? 'DESC' : 'ASC'
+      return (
+        `SELECT * EXCLUDE __seq FROM ` +
+        `(SELECT *, ROW_NUMBER() OVER () AS __seq FROM (${inputSQL}) __t) ` +
+        `QUALIFY ROW_NUMBER() OVER (PARTITION BY "${d.keyColumn}" ORDER BY __seq ${order}) = 1`
+      )
+    }
+
+    case 'map-value': {
+      const d = node.data as MapValueData
+      const colName = d.columnName || 'mapped'
+      const expr = emitterExpression(nodeId, nodes)
+      const anchorEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'anchor-in')
+      if (anchorEdge) {
+        const anchorSQL = buildNodeSQL(anchorEdge.source, nodes, edges, anchorEdge.sourceHandle ?? undefined)
+        if (anchorSQL && expr) return `SELECT ${expr} AS "${colName}" FROM (${anchorSQL}) __anchor`
+      }
+      return expr ? `SELECT ${expr} AS "${colName}"` : null
+    }
+
+    case 'conditional-output': {
+      const d = node.data as ConditionalOutputData
+      const colName = d.columnName || 'result'
+      const expr = emitterExpression(nodeId, nodes)
+      const anchorEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'anchor-in')
+      if (anchorEdge) {
+        const anchorSQL = buildNodeSQL(anchorEdge.source, nodes, edges, anchorEdge.sourceHandle ?? undefined)
+        if (anchorSQL && expr) return `SELECT ${expr} AS "${colName}" FROM (${anchorSQL}) __anchor`
+      }
+      return expr ? `SELECT ${expr} AS "${colName}"` : null
+    }
+
     default:
       return null
   }
@@ -266,6 +328,19 @@ export function getNodeOutputColumns(
     case 'increment-value': {
       const d = node.data as IncrementValueData
       return [{ name: d.columnName || 'index', type: 'INTEGER' }]
+    }
+
+    case 'unique':
+      return (node.data as UniqueNodeData).inputColumns ?? []
+
+    case 'map-value': {
+      const d = node.data as MapValueData
+      return [{ name: d.columnName || 'mapped', type: 'TEXT' }]
+    }
+
+    case 'conditional-output': {
+      const d = node.data as ConditionalOutputData
+      return [{ name: d.columnName || 'result', type: 'TEXT' }]
     }
 
     default:

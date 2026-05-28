@@ -84,17 +84,40 @@ export interface IncrementValueData extends Record<string, unknown> {
   hasAnchor?: boolean
 }
 
+export interface UniqueNodeData extends Record<string, unknown> {
+  keyColumn: string            // column to deduplicate on
+  keep: 'first' | 'last'      // which occurrence to keep
+  inputColumns: ColumnInfo[]
+}
+
+export interface MapValueData extends Record<string, unknown> {
+  columnName: string           // output column name wired to Destination
+  sourceColumn: string         // upstream column whose value is looked up
+  mappings: Array<{ from: string; to: string }>
+  hasAnchor?: boolean
+}
+
+export interface ConditionalOutputData extends Record<string, unknown> {
+  columnName: string           // output column name wired to Destination
+  conditions: Array<{ condition: string; output: string }>
+  fallback: string             // ELSE value (empty = NULL)
+  hasAnchor?: boolean
+}
+
 // ─── Union node type ─────────────────────────────────────────────────────────
 
 export type AppNode =
-  | Node<CSVNodeData,        'csv-input'>
-  | Node<JoinNodeData,       'join'>
-  | Node<TransformNodeData,  'transform'>
-  | Node<DestinationNodeData,'destination'>
-  | Node<CSVOutputNodeData,  'csv-output'>
-  | Node<MergeNodeData,      'merge'>
-  | Node<FilterNodeData,     'filter'>
-  | Node<StaticValueData,    'static-value'>
-  | Node<IncrementValueData, 'increment-value'>
+  | Node<CSVNodeData,            'csv-input'>
+  | Node<JoinNodeData,           'join'>
+  | Node<TransformNodeData,      'transform'>
+  | Node<DestinationNodeData,    'destination'>
+  | Node<CSVOutputNodeData,      'csv-output'>
+  | Node<MergeNodeData,          'merge'>
+  | Node<FilterNodeData,         'filter'>
+  | Node<StaticValueData,        'static-value'>
+  | Node<IncrementValueData,     'increment-value'>
+  | Node<UniqueNodeData,         'unique'>
+  | Node<MapValueData,           'map-value'>
+  | Node<ConditionalOutputData,  'conditional-output'>
 
 export type AppEdge = Edge
