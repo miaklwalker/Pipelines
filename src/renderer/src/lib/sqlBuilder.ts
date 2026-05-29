@@ -3,6 +3,7 @@ import type {
   CSVNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
   UniqueNodeData, MapValueData, ConditionalOutputData,
+  SortNodeData, LimitNodeData, AggregateNodeData,
   ColumnInfo,
 } from './types'
 
@@ -264,6 +265,60 @@ export function buildNodeSQL(
       return expr ? `SELECT ${expr} AS "${colName}"` : null
     }
 
+    case 'sort': {
+      const d = node.data as SortNodeData
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      if (!inputEdge) return null
+      const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+      if (!inputSQL) return null
+      const validKeys = (d.sortKeys ?? []).filter((k) => k.column)
+      if (!validKeys.length) return `SELECT * FROM (${inputSQL}) __s`
+      const orderBy = validKeys.map((k) => `"${k.column}" ${k.direction}`).join(', ')
+      return `SELECT * FROM (${inputSQL}) __s ORDER BY ${orderBy}`
+    }
+
+    case 'limit': {
+      const d = node.data as LimitNodeData
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      if (!inputEdge) return null
+      const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+      if (!inputSQL) return null
+      const count  = typeof d.count  === 'number' ? Math.max(1, d.count)  : 100
+      const offset = typeof d.offset === 'number' ? Math.max(0, d.offset) : 0
+      return offset > 0
+        ? `SELECT * FROM (${inputSQL}) __l LIMIT ${count} OFFSET ${offset}`
+        : `SELECT * FROM (${inputSQL}) __l LIMIT ${count}`
+    }
+
+    case 'aggregate': {
+      const d = node.data as AggregateNodeData
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      if (!inputEdge) return null
+      const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+      if (!inputSQL) return null
+
+      const groupCols = (d.groupBy ?? []).map((c) => `"${c}"`)
+      const aggExprs  = (d.aggregations ?? [])
+        .filter((a) => a.alias)
+        .map((a) => {
+          const alias = `"${a.alias}"`
+          switch (a.func) {
+            case 'COUNT':          return `COUNT(*) AS ${alias}`
+            case 'COUNT_DISTINCT': return `COUNT(DISTINCT "${a.column}") AS ${alias}`
+            case 'SUM':            return `SUM("${a.column}") AS ${alias}`
+            case 'AVG':            return `AVG("${a.column}") AS ${alias}`
+            case 'MIN':            return `MIN("${a.column}") AS ${alias}`
+            case 'MAX':            return `MAX("${a.column}") AS ${alias}`
+          }
+        })
+
+      if (!groupCols.length && !aggExprs.length) return `SELECT * FROM (${inputSQL}) __agg`
+
+      const selectParts = [...groupCols, ...aggExprs].join(', ')
+      const groupByClause = groupCols.length ? ` GROUP BY ${groupCols.join(', ')}` : ''
+      return `SELECT ${selectParts} FROM (${inputSQL}) __agg${groupByClause}`
+    }
+
     default:
       return null
   }
@@ -341,6 +396,32 @@ export function getNodeOutputColumns(
     case 'conditional-output': {
       const d = node.data as ConditionalOutputData
       return [{ name: d.columnName || 'result', type: 'TEXT' }]
+    }
+
+    case 'sort':
+      return (node.data as SortNodeData).inputColumns ?? []
+
+    case 'limit':
+      // Limit passes through columns from upstream — we need to look upstream
+      return (() => {
+        const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+        return inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
+      })()
+
+    case 'aggregate': {
+      const d = node.data as AggregateNodeData
+      const inputCols = d.inputColumns ?? []
+      const groupCols = (d.groupBy ?? []).map((name) => {
+        const col = inputCols.find((c) => c.name === name)
+        return { name, type: col?.type ?? 'TEXT' }
+      })
+      const aggCols = (d.aggregations ?? [])
+        .filter((a) => a.alias)
+        .map((a) => ({
+          name: a.alias,
+          type: (a.func === 'AVG') ? 'DOUBLE' : 'BIGINT',
+        }))
+      return [...groupCols, ...aggCols]
     }
 
     default:

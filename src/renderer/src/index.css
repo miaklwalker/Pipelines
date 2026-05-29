@@ -344,6 +344,31 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+/* ── Aggregate node ─────────────────────────────────── */
+.agg-section { padding: 6px 10px 4px; }
+.agg-section-label {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-muted); margin-bottom: 5px;
+}
+.agg-col-pills { display: flex; flex-wrap: wrap; gap: 4px; }
+.agg-col-pill {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all 0.12s;
+  max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agg-col-pill.active { background: rgba(59,130,246,0.18); border-color: var(--blue); color: var(--blue); }
+.agg-col-pill:not(.active):hover { border-color: rgba(255,255,255,0.2); color: var(--text-dim); }
+.agg-star {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 14px; color: var(--text-muted); font-family: var(--font-mono);
+}
+
 /* ── Inline hint text ───────────────────────────────── */
 .node-hint {
   font-size: 9.5px;

@@ -84,6 +84,26 @@ export interface IncrementValueData extends Record<string, unknown> {
   hasAnchor?: boolean
 }
 
+export interface SortKey { column: string; direction: 'ASC' | 'DESC' }
+
+export interface SortNodeData extends Record<string, unknown> {
+  sortKeys: SortKey[]
+  inputColumns: ColumnInfo[]
+}
+
+export interface LimitNodeData extends Record<string, unknown> {
+  count: number
+  offset: number
+}
+
+export type AggFunc = 'COUNT' | 'COUNT_DISTINCT' | 'SUM' | 'AVG' | 'MIN' | 'MAX'
+export interface AggItem { id: string; func: AggFunc; column: string; alias: string }
+export interface AggregateNodeData extends Record<string, unknown> {
+  groupBy: string[]
+  aggregations: AggItem[]
+  inputColumns: ColumnInfo[]
+}
+
 export interface UniqueNodeData extends Record<string, unknown> {
   keyColumn: string            // column to deduplicate on
   keep: 'first' | 'last'      // which occurrence to keep
@@ -119,5 +139,8 @@ export type AppNode =
   | Node<UniqueNodeData,         'unique'>
   | Node<MapValueData,           'map-value'>
   | Node<ConditionalOutputData,  'conditional-output'>
+  | Node<SortNodeData,           'sort'>
+  | Node<LimitNodeData,          'limit'>
+  | Node<AggregateNodeData,      'aggregate'>
 
 export type AppEdge = Edge

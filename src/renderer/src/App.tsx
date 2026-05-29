@@ -24,6 +24,7 @@ import type {
   CSVNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
   UniqueNodeData, MapValueData, ConditionalOutputData,
+  SortNodeData, LimitNodeData, AggregateNodeData,
   PreviewResult,
 } from './lib/types'
 
@@ -132,7 +133,7 @@ function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
       return { ...node, data: { ...node.data, inputColumns: inputCols } }
     }
 
-    if (node.type === 'unique') {
+    if (node.type === 'unique' || node.type === 'sort' || node.type === 'aggregate') {
       const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
       const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
       return { ...node, data: { ...node.data, inputColumns: inputCols } }
@@ -163,6 +164,9 @@ function nodeLabel(node: AppNode | undefined): string {
   if (node.type === 'unique')              return 'Unique'
   if (node.type === 'map-value')           return (node.data as MapValueData).columnName || 'Map'
   if (node.type === 'conditional-output')  return (node.data as ConditionalOutputData).columnName || 'Conditional'
+  if (node.type === 'sort')                return 'Sort'
+  if (node.type === 'limit')               return `Limit ${(node.data as LimitNodeData).count}`
+  if (node.type === 'aggregate')           return 'Aggregate'
   return ''
 }
 
@@ -345,6 +349,24 @@ export default function App() {
         setNodes((ns) => [...ns, {
           id: uuid(), type: 'conditional-output', position: nextPosition(),
           data: { columnName: 'result', conditions: [], fallback: '', hasAnchor: false } satisfies ConditionalOutputData,
+        }])
+        break
+      case 'sort':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'sort', position: nextPosition(),
+          data: { sortKeys: [], inputColumns: [] } satisfies SortNodeData,
+        }])
+        break
+      case 'limit':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'limit', position: nextPosition(),
+          data: { count: 100, offset: 0 } satisfies LimitNodeData,
+        }])
+        break
+      case 'aggregate':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'aggregate', position: nextPosition(),
+          data: { groupBy: [], aggregations: [], inputColumns: [] } satisfies AggregateNodeData,
         }])
         break
     }
