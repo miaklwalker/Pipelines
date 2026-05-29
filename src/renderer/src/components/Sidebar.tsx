@@ -3,9 +3,8 @@ import { getAllDefs, type NodeDef, type PortDef } from '../nodes'
 
 // ── Port dot ──────────────────────────────────────────────────────────────────
 function Port({ type }: { type: PortDef['type'] }) {
-  return (
-    <div className={`palette-port ${type === 'row' ? 'palette-port-row' : 'palette-port-col'}`} />
-  )
+  const cls = type === 'conn' ? 'palette-port-conn' : type === 'row' ? 'palette-port-row' : 'palette-port-col'
+  return <div className={`palette-port ${cls}`} />
 }
 
 // ── Palette card ──────────────────────────────────────────────────────────────
@@ -14,13 +13,11 @@ function PaletteCard({ def, onClick }: { def: NodeDef<any>; onClick: () => void 
   const { Icon, name, desc, inputPorts, outputPorts, hasAdvanced } = def
   return (
     <button className="palette-card" onClick={onClick} title={desc}>
-      {/* Input ports */}
       <div className="palette-ports">
         {inputPorts.map((p, i) => <Port key={i} type={p.type} />)}
         {inputPorts.length === 0 && <div style={{ width: 7 }} />}
       </div>
 
-      {/* Icon + label */}
       <div className="palette-body">
         <div className="palette-icon-wrap">
           <Icon size={13} strokeWidth={1.75} />
@@ -29,18 +26,13 @@ function PaletteCard({ def, onClick }: { def: NodeDef<any>; onClick: () => void 
           <div className="palette-name">
             {name}
             {hasAdvanced && (
-              <SlidersHorizontal
-                size={9}
-                strokeWidth={2}
-                style={{ display: 'inline', marginLeft: 4, verticalAlign: 'middle', opacity: 0.5 }}
-              />
+              <SlidersHorizontal size={9} strokeWidth={2} style={{ display: 'inline', marginLeft: 4, verticalAlign: 'middle', opacity: 0.5 }} />
             )}
           </div>
           <div className="palette-desc">{desc}</div>
         </div>
       </div>
 
-      {/* Output ports */}
       <div className="palette-ports">
         {outputPorts.map((p, i) => <Port key={i} type={p.type} />)}
         {outputPorts.length === 0 && <div style={{ width: 7 }} />}
@@ -50,40 +42,38 @@ function PaletteCard({ def, onClick }: { def: NodeDef<any>; onClick: () => void 
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
-interface Props {
-  onAdd: (type: string) => void
-}
+interface Props { onAdd: (type: string) => void }
 
 export default function Sidebar({ onAdd }: Props) {
   const defs = getAllDefs()
-  const inputs     = defs.filter((d) => d.category === 'input')
-  const operations = defs.filter((d) => d.category === 'operation')
-  const outputs    = defs.filter((d) => d.category === 'output')
-  const emitters   = defs.filter((d) => d.category === 'emitter')
+  const inputs   = defs.filter((d) => d.category === 'input')
+  const ops      = defs.filter((d) => d.category === 'operation')
+  const outputs  = defs.filter((d) => d.category === 'output')
+  const emitters = defs.filter((d) => d.category === 'emitter')
+  const database = defs.filter((d) => d.category === 'database')
 
   return (
     <aside className="sidebar">
       <div className="sidebar-section-title">Inputs</div>
-      {inputs.map((def) => (
-        <PaletteCard key={def.type} def={def} onClick={() => onAdd(def.type)} />
-      ))}
+      {inputs.map((def) => <PaletteCard key={def.type} def={def} onClick={() => onAdd(def.type)} />)}
 
       <div className="sidebar-section-title" style={{ marginTop: 10 }}>Operations</div>
-      {operations.map((def) => (
-        <PaletteCard key={def.type} def={def} onClick={() => onAdd(def.type)} />
-      ))}
+      {ops.map((def) => <PaletteCard key={def.type} def={def} onClick={() => onAdd(def.type)} />)}
 
       <div className="sidebar-section-title" style={{ marginTop: 10 }}>Outputs</div>
-      {outputs.map((def) => (
-        <PaletteCard key={def.type} def={def} onClick={() => onAdd(def.type)} />
-      ))}
+      {outputs.map((def) => <PaletteCard key={def.type} def={def} onClick={() => onAdd(def.type)} />)}
 
       {emitters.length > 0 && (
         <>
           <div className="sidebar-section-title" style={{ marginTop: 10 }}>Emitters</div>
-          {emitters.map((def) => (
-            <PaletteCard key={def.type} def={def} onClick={() => onAdd(def.type)} />
-          ))}
+          {emitters.map((def) => <PaletteCard key={def.type} def={def} onClick={() => onAdd(def.type)} />)}
+        </>
+      )}
+
+      {database.length > 0 && (
+        <>
+          <div className="sidebar-section-title sidebar-section-title-db" style={{ marginTop: 10 }}>Database</div>
+          {database.map((def) => <PaletteCard key={def.type} def={def} onClick={() => onAdd(def.type)} />)}
         </>
       )}
 
@@ -92,9 +82,7 @@ export default function Sidebar({ onAdd }: Props) {
 
       {/* Legend */}
       <div style={{ padding: '8px 12px 10px' }}>
-        <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>
-          Legend
-        </div>
+        <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>Legend</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--blue)', border: '1px solid var(--blue-dark)', flexShrink: 0 }} />
@@ -103,6 +91,10 @@ export default function Sidebar({ onAdd }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--green)', border: '1px solid var(--green-dark)', flexShrink: 0 }} />
             <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Column (individual)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: '#7c3aed', border: '1px solid #5b21b6', flexShrink: 0 }} />
+            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Database connection</span>
           </div>
         </div>
         <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.6 }}>

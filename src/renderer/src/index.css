@@ -41,6 +41,7 @@ html, body, #root {
 .react-flow__edge.row-edge-fail .react-flow__edge-path { stroke: var(--red);   stroke-width: 2.5; }
 .react-flow__edge.col-edge      .react-flow__edge-path { stroke: var(--green); stroke-width: 1.5; }
 .react-flow__edge.anchor-edge  .react-flow__edge-path { stroke: #f59e0b; stroke-dasharray: 5,3; stroke-width: 1.5; }
+.react-flow__edge.conn-edge    .react-flow__edge-path { stroke: #7c3aed; stroke-dasharray: 6,3; stroke-width: 1.5; }
 .react-flow__edge.selected      .react-flow__edge-path { stroke: #fff; stroke-width: 2.5; }
 
 /* ── Edge focus: dim unrelated, fade upstream by depth ── */
@@ -378,6 +379,58 @@ html, body, #root {
 }
 .node-hint code { font-family: var(--font-mono); color: var(--text-dim); }
 
+/* ── Database nodes ─────────────────────────────────── */
+.db-test-btn {
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  width: 100%; padding: 5px 8px;
+  background: rgba(124,58,237,0.12); border: 1px solid rgba(124,58,237,0.35);
+  border-radius: 5px; color: #a78bfa; font-size: 11px; cursor: pointer;
+  transition: all 0.15s;
+}
+.db-test-btn:hover:not(:disabled) { background: rgba(124,58,237,0.22); border-color: #7c3aed; }
+.db-test-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.db-fetch-btn {
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  width: 100%; padding: 5px 8px;
+  background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3);
+  border-radius: 5px; color: var(--blue); font-size: 11px; cursor: pointer;
+  transition: all 0.15s; margin-top: 4px;
+}
+.db-fetch-btn:hover:not(.disabled):not(:disabled) { background: rgba(59,130,246,0.2); border-color: var(--blue); }
+.db-fetch-btn.disabled, .db-fetch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.db-error-msg {
+  margin-top: 6px; padding: 6px 8px;
+  background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+  border-radius: 5px; color: var(--red); font-size: 10.5px;
+  font-family: var(--font-mono); word-break: break-all; line-height: 1.4;
+}
+.db-cache-badge {
+  display: flex; align-items: center; gap: 5px; margin-top: 4px;
+  padding: 4px 8px; background: rgba(124,58,237,0.1);
+  border: 1px solid rgba(124,58,237,0.25); border-radius: 5px;
+  font-size: 10px; color: #a78bfa;
+}
+.db-cache-badge span { flex: 1; }
+.db-cache-clear {
+  background: none; border: none; color: rgba(167,139,250,0.6);
+  cursor: pointer; padding: 1px; border-radius: 3px; display: flex; align-items: center;
+}
+.db-cache-clear:hover { color: var(--red); background: rgba(239,68,68,0.1); }
+.db-sql-area {
+  resize: vertical; font-family: var(--font-mono); font-size: 10.5px !important;
+  min-height: 52px; line-height: 1.4;
+}
+.db-toggle-pass {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 11px; padding: 0 2px; flex-shrink: 0;
+}
+.db-toggle-pass:hover { color: var(--text); }
+.db-ssl-label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--text-dim); cursor: pointer;
+}
+.sidebar-section-title-db { color: #a78bfa; }
+
 /* ── Status badges ──────────────────────────────────── */
 .status-row { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-top: 1px solid var(--border); }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
@@ -544,6 +597,11 @@ html, body, #root {
   background: var(--green);
   border: 1px solid var(--green-dark);
   border-radius: 50%;
+}
+.palette-port-conn {
+  background: #7c3aed;
+  border: 1px solid #5b21b6;
+  border-radius: 2px;
 }
 
 .palette-body {

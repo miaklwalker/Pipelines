@@ -18,13 +18,15 @@ import '@xyflow/react/dist/style.css'
 import { FolderOpen, Save } from 'lucide-react'
 
 import { v4 as uuid } from 'uuid'
-import { buildNodeSQL, getNodeOutputColumns } from './lib/sqlBuilder'
+import { buildNodeSQL } from './lib/sqlBuilder'
+import { propagateColumns } from './lib/graphUtils'
 import type {
   AppNode, AppEdge,
   CSVNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
   UniqueNodeData, MapValueData, ConditionalOutputData,
   SortNodeData, LimitNodeData, AggregateNodeData,
+  ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
   PreviewResult,
 } from './lib/types'
 
@@ -39,6 +41,7 @@ function edgeClass(connection: Connection | AppEdge): string {
   const src = (connection as AppEdge).sourceHandle ?? ''
   const tgt = (connection as AppEdge).targetHandle ?? ''
   if (src.startsWith('col-') || src === 'col-out') return 'col-edge'
+  if (src === 'conn-out')         return 'conn-edge'
   if (tgt === 'anchor-in')        return 'row-edge anchor-edge'
   if (src === 'row-out-pass')     return 'row-edge row-edge-pass'
   if (src === 'row-out-fail')     return 'row-edge row-edge-fail'
@@ -80,75 +83,6 @@ function getUpstreamEdgeDistances(nodeId: string, edges: AppEdge[]): Map<string,
   return edgeDist
 }
 
-// ── Column propagation through the graph ─────────────────────────────────────
-function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
-  return nodes.map((node) => {
-    if (node.type === 'join') {
-      const leftEdge  = edges.find((e) => e.target === node.id && e.targetHandle === 'row-left')
-      const rightEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-right')
-      const leftCols  = leftEdge  ? getNodeOutputColumns(leftEdge.source,  nodes, edges) : []
-      const rightCols = rightEdge ? getNodeOutputColumns(rightEdge.source, nodes, edges) : []
-      const d = node.data as JoinNodeData
-      const leftKey  = leftCols.find((c)  => c.name === d.leftKey)  ? d.leftKey  : ''
-      const rightKey = rightCols.find((c) => c.name === d.rightKey) ? d.rightKey : ''
-      return { ...node, data: { ...d, leftColumns: leftCols, rightColumns: rightCols, leftKey, rightKey } }
-    }
-
-    if (node.type === 'transform') {
-      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
-      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
-      return { ...node, data: { ...node.data, inputColumns: inputCols } }
-    }
-
-    if (node.type === 'destination') {
-      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
-      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
-      const d = node.data as DestinationNodeData
-      const existingMap = d.colMap ?? []
-      const colMap = inputCols.map((col) => {
-        const existing = existingMap.find((m) => m.sourceCol === col.name)
-        return existing ?? { sourceCol: col.name, destCol: col.name, included: true }
-      })
-      return { ...node, data: { ...d, inputColumns: inputCols, colMap } }
-    }
-
-    if (node.type === 'csv-output') {
-      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
-      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
-      return { ...node, data: { ...node.data, inputColumns: inputCols } }
-    }
-
-    if (node.type === 'merge') {
-      // Prefer left input; fall back to right if only right is connected
-      const leftEdge  = edges.find((e) => e.target === node.id && e.targetHandle === 'row-left')
-      const rightEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-right')
-      const srcEdge   = leftEdge ?? rightEdge
-      const inputCols = srcEdge ? getNodeOutputColumns(srcEdge.source, nodes, edges) : []
-      return { ...node, data: { ...node.data, inputColumns: inputCols } }
-    }
-
-    if (node.type === 'filter') {
-      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
-      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
-      return { ...node, data: { ...node.data, inputColumns: inputCols } }
-    }
-
-    if (node.type === 'unique' || node.type === 'sort' || node.type === 'aggregate') {
-      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
-      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
-      return { ...node, data: { ...node.data, inputColumns: inputCols } }
-    }
-
-    if (node.type === 'static-value' || node.type === 'increment-value'
-      || node.type === 'map-value' || node.type === 'conditional-output') {
-      const hasAnchor = edges.some((e) => e.target === node.id && e.targetHandle === 'anchor-in')
-      return { ...node, data: { ...node.data, hasAnchor } }
-    }
-
-    return node
-  })
-}
-
 // ── Node label for preview modal title ────────────────────────────────────────
 function nodeLabel(node: AppNode | undefined): string {
   if (!node) return ''
@@ -164,9 +98,13 @@ function nodeLabel(node: AppNode | undefined): string {
   if (node.type === 'unique')              return 'Unique'
   if (node.type === 'map-value')           return (node.data as MapValueData).columnName || 'Map'
   if (node.type === 'conditional-output')  return (node.data as ConditionalOutputData).columnName || 'Conditional'
-  if (node.type === 'sort')                return 'Sort'
-  if (node.type === 'limit')               return `Limit ${(node.data as LimitNodeData).count}`
-  if (node.type === 'aggregate')           return 'Aggregate'
+  if (node.type === 'sort')               return 'Sort'
+  if (node.type === 'limit')              return `Limit ${(node.data as LimitNodeData).count}`
+  if (node.type === 'aggregate')          return 'Aggregate'
+  if (node.type === 'connection')         return `DB: ${(node.data as ConnectionNodeData).config?.host || 'Connection'}`
+  if (node.type === 'read-table')         return (node.data as ReadTableNodeData).tableName || 'Read Table'
+  if (node.type === 'read-table-cached')  return (node.data as ReadTableCachedNodeData).tableName || 'Read (Cached)'
+  if (node.type === 'write-table')        return (node.data as WriteTableNodeData).tableName || 'Write Table'
   return ''
 }
 
@@ -225,7 +163,7 @@ export default function App() {
     setEdges((es) => {
       const tgt = connection.targetHandle ?? ''
       const shouldReplace = tgt.startsWith('row-') || tgt.startsWith('col-')
-        || tgt === 'val-in' || tgt === 'anchor-in'
+        || tgt === 'val-in' || tgt === 'anchor-in' || tgt === 'conn-in'
       const filtered = shouldReplace
         ? es.filter((e) => !(e.target === connection.target && e.targetHandle === connection.targetHandle))
         : es
@@ -245,9 +183,11 @@ export default function App() {
     const tgtRow = tgt === 'row-left' || tgt === 'row-right' || tgt === 'row-in'
       || tgt === 'val-in' || tgt === 'anchor-in'
     // Column handles (emitters use plain 'col-out', others use 'col-out-{name}')
-    const srcCol = src.startsWith('col-out-') || src === 'col-out'
-    const tgtCol = tgt.startsWith('col-in-')
-    return (srcRow && tgtRow) || (srcCol && tgtCol)
+    const srcCol  = src.startsWith('col-out-') || src === 'col-out'
+    const tgtCol  = tgt.startsWith('col-in-')
+    const srcConn = src === 'conn-out'
+    const tgtConn = tgt === 'conn-in'
+    return (srcRow && tgtRow) || (srcCol && tgtCol) || (srcConn && tgtConn)
   }, [])
 
   // ── Canvas click → clear selection ───────────────────────────────────────
@@ -369,6 +309,30 @@ export default function App() {
           data: { groupBy: [], aggregations: [], inputColumns: [] } satisfies AggregateNodeData,
         }])
         break
+      case 'connection':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'connection', position: nextPosition(),
+          data: { config: { host: 'localhost', port: 5432, database: '', user: '', password: '', ssl: false }, testStatus: 'idle' } satisfies ConnectionNodeData,
+        }])
+        break
+      case 'read-table':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'read-table', position: nextPosition(),
+          data: { readMode: 'table', tableName: '', customSQL: '', csvPath: null, columns: [], rowCount: null, status: 'idle', resolvedConfig: null } satisfies ReadTableNodeData,
+        }])
+        break
+      case 'read-table-cached':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'read-table-cached', position: nextPosition(),
+          data: { readMode: 'table', tableName: '', customSQL: '', csvPath: null, columns: [], rowCount: null, status: 'idle', resolvedConfig: null, cacheDate: null } satisfies ReadTableCachedNodeData,
+        }])
+        break
+      case 'write-table':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'write-table', position: nextPosition(),
+          data: { tableName: '', writeMode: 'append', status: 'idle', rowCount: null, inputColumns: [], resolvedConfig: null } satisfies WriteTableNodeData,
+        }])
+        break
     }
   }, [])
 
@@ -478,7 +442,7 @@ export default function App() {
             isValidConnection={isValidConnection}
             fitView
             fitViewOptions={{ padding: 0.2 }}
-            deleteKeyCode="Delete"
+            deleteKeyCode={['Delete', 'Backspace']}
             multiSelectionKeyCode="Shift"
             minZoom={0.2}
             maxZoom={2}

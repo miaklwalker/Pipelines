@@ -4,6 +4,7 @@ import type {
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
   UniqueNodeData, MapValueData, ConditionalOutputData,
   SortNodeData, LimitNodeData, AggregateNodeData,
+  ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
   ColumnInfo,
 } from './types'
 
@@ -319,6 +320,28 @@ export function buildNodeSQL(
       return `SELECT ${selectParts} FROM (${inputSQL}) __agg${groupByClause}`
     }
 
+    case 'connection':
+      return null  // provides config, not data
+
+    case 'read-table': {
+      const d = node.data as ReadTableNodeData
+      if (!d.csvPath) return null
+      return `SELECT * FROM read_csv_auto('${escapePath(d.csvPath)}')`
+    }
+
+    case 'read-table-cached': {
+      const d = node.data as ReadTableCachedNodeData
+      if (!d.csvPath) return null
+      return `SELECT * FROM read_csv_auto('${escapePath(d.csvPath)}')`
+    }
+
+    case 'write-table': {
+      // For preview: show the upstream data that would be written
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      if (!inputEdge) return null
+      return buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+    }
+
     default:
       return null
   }
@@ -423,6 +446,18 @@ export function getNodeOutputColumns(
         }))
       return [...groupCols, ...aggCols]
     }
+
+    case 'connection':
+      return []
+
+    case 'read-table':
+      return (node.data as ReadTableNodeData).columns ?? []
+
+    case 'read-table-cached':
+      return (node.data as ReadTableCachedNodeData).columns ?? []
+
+    case 'write-table':
+      return (node.data as WriteTableNodeData).inputColumns ?? []
 
     default:
       return []

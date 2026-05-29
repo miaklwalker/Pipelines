@@ -84,6 +84,69 @@ export interface IncrementValueData extends Record<string, unknown> {
   hasAnchor?: boolean
 }
 
+// ─── PostgreSQL types ────────────────────────────────────────────────────────
+
+export interface PgConfig {
+  host: string
+  port: number
+  database: string
+  user: string
+  password: string
+  ssl: boolean
+}
+
+export interface PgFetchResult {
+  csvPath: string
+  columns: ColumnInfo[]
+  rowCount: number
+  fromCache?: boolean
+  cacheDate?: string
+}
+
+export type DbReadMode = 'table' | 'sql'
+export type DbWriteMode = 'append' | 'replace'
+
+export interface ConnectionNodeData extends Record<string, unknown> {
+  config: PgConfig
+  testStatus: 'idle' | 'testing' | 'ok' | 'error'
+  testError?: string
+}
+
+export interface ReadTableNodeData extends Record<string, unknown> {
+  readMode: DbReadMode
+  tableName: string
+  customSQL: string
+  csvPath: string | null
+  columns: ColumnInfo[]
+  rowCount: number | null
+  status: 'idle' | 'fetching' | 'ready' | 'error'
+  error?: string
+  resolvedConfig?: PgConfig | null
+}
+
+export interface ReadTableCachedNodeData extends Record<string, unknown> {
+  readMode: DbReadMode
+  tableName: string
+  customSQL: string
+  csvPath: string | null
+  columns: ColumnInfo[]
+  rowCount: number | null
+  status: 'idle' | 'fetching' | 'ready' | 'error'
+  error?: string
+  resolvedConfig?: PgConfig | null
+  cacheDate: string | null
+}
+
+export interface WriteTableNodeData extends Record<string, unknown> {
+  tableName: string
+  writeMode: DbWriteMode
+  status: 'idle' | 'writing' | 'done' | 'error'
+  rowCount: number | null
+  error?: string
+  resolvedConfig?: PgConfig | null
+  inputColumns: ColumnInfo[]
+}
+
 export interface SortKey { column: string; direction: 'ASC' | 'DESC' }
 
 export interface SortNodeData extends Record<string, unknown> {
@@ -139,8 +202,12 @@ export type AppNode =
   | Node<UniqueNodeData,         'unique'>
   | Node<MapValueData,           'map-value'>
   | Node<ConditionalOutputData,  'conditional-output'>
-  | Node<SortNodeData,           'sort'>
-  | Node<LimitNodeData,          'limit'>
-  | Node<AggregateNodeData,      'aggregate'>
+  | Node<SortNodeData,            'sort'>
+  | Node<LimitNodeData,           'limit'>
+  | Node<AggregateNodeData,       'aggregate'>
+  | Node<ConnectionNodeData,      'connection'>
+  | Node<ReadTableNodeData,       'read-table'>
+  | Node<ReadTableCachedNodeData, 'read-table-cached'>
+  | Node<WriteTableNodeData,      'write-table'>
 
 export type AppEdge = Edge

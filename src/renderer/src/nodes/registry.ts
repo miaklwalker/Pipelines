@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react'
 
 // ── Port descriptor ────────────────────────────────────────────────────────────
-export type PortDef = { type: 'row' | 'col'; label?: string }
+export type PortDef = { type: 'row' | 'col' | 'conn'; label?: string }
 
 // ── Per-node help content ──────────────────────────────────────────────────────
 export interface NodeHelp {
@@ -17,7 +17,7 @@ export interface NodeDef<D = any> {
   /** ReactFlow node type key */
   type: string
   /** Sidebar grouping */
-  category: 'input' | 'operation' | 'output' | 'emitter'
+  category: 'input' | 'operation' | 'output' | 'emitter' | 'database'
   /** Display name */
   name: string
   /** One-line description shown in the sidebar */

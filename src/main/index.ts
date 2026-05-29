@@ -1,8 +1,11 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
-import { promises as fs } from 'fs'
+import { promises as fs, existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import * as duckdb from 'duckdb'
+import * as crypto from 'crypto'
+import * as pg from 'pg'
+const { Pool } = pg
 
 let db: duckdb.Database
 let conn: duckdb.Connection
@@ -161,6 +164,155 @@ ipcMain.handle('project:load', async (): Promise<string | null> => {
   })
   if (canceled || !filePaths[0]) return null
   return fs.readFile(filePaths[0], 'utf-8')
+})
+
+// ─── PostgreSQL handlers ──────────────────────────────────────────────────────
+
+interface PgConfig { host: string; port: number; database: string; user: string; password: string; ssl: boolean }
+
+/** Escape a CSV field value */
+function csvField(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  const s = v instanceof Date ? v.toISOString() : String(v)
+  if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+    return '"' + s.replace(/"/g, '""') + '"'
+  }
+  return s
+}
+
+/** Serialize pg result to CSV string */
+function pgResultToCSV(fields: { name: string }[], rows: Record<string, unknown>[]): string {
+  const header = fields.map((f) => csvField(f.name)).join(',')
+  const lines  = rows.map((row) => fields.map((f) => csvField(row[f.name])).join(','))
+  return [header, ...lines].join('\n') + '\n'
+}
+
+/** Derive a stable path for a cached query result */
+function pgCachePath(config: PgConfig, query: string): string {
+  const hash = crypto.createHash('md5')
+    .update(JSON.stringify({ h: config.host, p: config.port, db: config.database, u: config.user }) + query)
+    .digest('hex').slice(0, 16)
+  const dir = join(app.getPath('userData'), 'pg-cache')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return join(dir, hash + '.csv')
+}
+
+/** Sniff column types from a CSV file using DuckDB */
+function sniffCSVColumns(csvPath: string): Promise<ColumnInfo[]> {
+  return new Promise((resolve, reject) => {
+    const safe = csvPath.replace(/'/g, "''")
+    conn.run(`CREATE OR REPLACE VIEW __pg_sniff AS SELECT * FROM read_csv_auto('${safe}') LIMIT 0`, (err) => {
+      if (err) return reject(err)
+      conn.all('DESCRIBE __pg_sniff', (descErr, rows) => {
+        if (descErr) return reject(descErr)
+        resolve((rows as DescribeRow[]).map((r) => ({ name: r.column_name, type: normalizeType(r.column_type) })))
+      })
+    })
+  })
+}
+
+// Test a PostgreSQL connection
+ipcMain.handle('pg:test', async (_, config: PgConfig): Promise<{ ok: boolean; error?: string }> => {
+  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 5000 })
+  try {
+    const client = await pool.connect()
+    client.release()
+    await pool.end()
+    return { ok: true }
+  } catch (err) {
+    await pool.end().catch(() => {})
+    return { ok: false, error: (err as Error).message }
+  }
+})
+
+// Fetch from PG, write to temp CSV, return metadata
+ipcMain.handle('pg:fetch', async (_, config: PgConfig, query: string): Promise<{ csvPath: string; columns: ColumnInfo[]; rowCount: number }> => {
+  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false })
+  try {
+    const result = await pool.query(query)
+    await pool.end()
+    const tmpDir = app.getPath('temp')
+    const csvPath = join(tmpDir, 'pg-fetch-' + Date.now() + '.csv')
+    const csv = pgResultToCSV(result.fields, result.rows)
+    await fs.writeFile(csvPath, csv, 'utf-8')
+    const columns = await sniffCSVColumns(csvPath)
+    return { csvPath, columns, rowCount: result.rowCount ?? result.rows.length }
+  } catch (err) {
+    await pool.end().catch(() => {})
+    throw err
+  }
+})
+
+// Fetch from PG with caching — if cache exists and force=false, return cached file
+ipcMain.handle('pg:fetch-cached', async (_, config: PgConfig, query: string, force: boolean): Promise<{ csvPath: string; columns: ColumnInfo[]; rowCount: number; fromCache: boolean; cacheDate: string }> => {
+  const cachePath = pgCachePath(config, query)
+  if (!force && existsSync(cachePath)) {
+    const stat = await fs.stat(cachePath)
+    const columns = await sniffCSVColumns(cachePath)
+    // Count rows (subtract header)
+    const content = await fs.readFile(cachePath, 'utf-8')
+    const rowCount = Math.max(0, content.split('\n').filter(Boolean).length - 1)
+    return { csvPath: cachePath, columns, rowCount, fromCache: true, cacheDate: stat.mtime.toISOString() }
+  }
+  // Fetch fresh data
+  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false })
+  try {
+    const result = await pool.query(query)
+    await pool.end()
+    const csv = pgResultToCSV(result.fields, result.rows)
+    await fs.writeFile(cachePath, csv, 'utf-8')
+    const columns = await sniffCSVColumns(cachePath)
+    return { csvPath: cachePath, columns, rowCount: result.rowCount ?? result.rows.length, fromCache: false, cacheDate: new Date().toISOString() }
+  } catch (err) {
+    await pool.end().catch(() => {})
+    throw err
+  }
+})
+
+// Delete a cached CSV file
+ipcMain.handle('pg:clear-cache', async (_, csvPath: string): Promise<void> => {
+  try { await fs.unlink(csvPath) } catch { /* already gone */ }
+})
+
+// Execute DuckDB SQL → insert into PG table
+ipcMain.handle('pg:write', async (_, config: PgConfig, sql: string, tableName: string, writeMode: string): Promise<{ rowCount: number }> => {
+  // 1. Run pipeline SQL in DuckDB to get rows
+  const rows: Record<string, unknown>[] = await new Promise((resolve, reject) => {
+    conn.all(sql, (err, r) => err ? reject(new Error(err.message)) : resolve(r as Record<string, unknown>[]))
+  })
+  if (!rows.length) return { rowCount: 0 }
+
+  const columns = Object.keys(rows[0])
+  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false })
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    if (writeMode === 'replace') {
+      await client.query(`TRUNCATE TABLE "${tableName}"`)
+    }
+    // Insert in batches of 100
+    const BATCH = 100
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch = rows.slice(i, i + BATCH)
+      const colList = columns.map((c) => `"${c}"`).join(', ')
+      const placeholders = batch.map((_, ri) =>
+        `(${columns.map((_, ci) => `$${ri * columns.length + ci + 1}`).join(', ')})`
+      ).join(', ')
+      const values = batch.flatMap((row) => columns.map((c) => {
+        const v = row[c]
+        return (typeof v === 'bigint') ? Number(v) : v
+      }))
+      await client.query(`INSERT INTO "${tableName}" (${colList}) VALUES ${placeholders}`, values)
+    }
+    await client.query('COMMIT')
+    return { rowCount: rows.length }
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+    await pool.end()
+  }
 })
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

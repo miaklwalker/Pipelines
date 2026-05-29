@@ -1,20 +1,29 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-export type ColumnInfo     = { name: string; type: string }
+export type ColumnInfo      = { name: string; type: string }
 export type CSVSelectResult = { filePath: string; fileName: string; columns: ColumnInfo[] }
 export type PreviewResult   = { columns: string[]; rows: (string | null)[][] }
 export type ExportResult    = { filePath: string; rowCount: number | null }
+export type PgConfig        = { host: string; port: number; database: string; user: string; password: string; ssl: boolean }
+export type PgFetchResult   = { csvPath: string; columns: ColumnInfo[]; rowCount: number; fromCache?: boolean; cacheDate?: string }
+export type PgWriteResult   = { rowCount: number }
 
 const api = {
   // CSV
   selectCSV: (): Promise<CSVSelectResult | null> => ipcRenderer.invoke('csv:select'),
   exportCSV: (sql: string, delimiter?: string): Promise<ExportResult | null> => ipcRenderer.invoke('csv:export', { sql, delimiter }),
-  // DB
+  // DuckDB preview
   dbPreview: (sql: string): Promise<PreviewResult> => ipcRenderer.invoke('db:preview', { sql }),
   // Project
   saveProject: (data: string): Promise<string | null> => ipcRenderer.invoke('project:save', { data }),
   saveToPath: (path: string, data: string): Promise<void> => ipcRenderer.invoke('project:saveToPath', { path, data }),
   loadProject: (): Promise<string | null> => ipcRenderer.invoke('project:load'),
+  // PostgreSQL
+  pgTest: (config: PgConfig): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('pg:test', config),
+  pgFetch: (config: PgConfig, query: string): Promise<PgFetchResult> => ipcRenderer.invoke('pg:fetch', config, query),
+  pgFetchCached: (config: PgConfig, query: string, force: boolean): Promise<PgFetchResult> => ipcRenderer.invoke('pg:fetch-cached', config, query, force),
+  pgClearCache: (csvPath: string): Promise<void> => ipcRenderer.invoke('pg:clear-cache', csvPath),
+  pgWrite: (config: PgConfig, sql: string, tableName: string, writeMode: string): Promise<PgWriteResult> => ipcRenderer.invoke('pg:write', config, sql, tableName, writeMode),
 }
 
 contextBridge.exposeInMainWorld('api', api)
