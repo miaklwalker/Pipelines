@@ -165,7 +165,7 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
               className="db-fetch-btn"
               style={{ flex: '0 0 auto', padding: '4px 8px' }}
               onClick={handleRefresh}
-              disabled={status === 'fetching'}
+              disabled={data.status === 'fetching'}
               title="Force re-fetch from database"
             >
               <RefreshCw size={11} strokeWidth={2} />

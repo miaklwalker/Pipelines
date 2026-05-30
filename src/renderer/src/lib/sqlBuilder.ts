@@ -5,6 +5,7 @@ import type {
   UniqueNodeData, MapValueData, ConditionalOutputData,
   SortNodeData, LimitNodeData, AggregateNodeData,
   ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
+  BrowseSchemaNodeData, JoinColSelection,
   ColumnInfo,
 } from './types'
 
@@ -61,6 +62,32 @@ function emitterExpression(nodeId: string, nodes: AppNode[]): string | null {
 }
 
 /**
+ * Build the SELECT clause for a Join node, respecting any column selection.
+ * Falls back to `__l.*, __r."x" AS "r_x"` when no selection is defined.
+ */
+function buildJoinSelect(d: JoinNodeData): string {
+  const sel = (d.columnSelection ?? []).filter((s) => s.included)
+
+  if (sel.length > 0) {
+    const parts = sel.map((s: JoinColSelection) => {
+      const tbl = s.side === 'left' ? '__l' : '__r'
+      // Only emit alias if it differs from the bare column name
+      const needsAlias = s.alias && s.alias !== s.name
+      return needsAlias
+        ? `${tbl}."${s.name}" AS "${s.alias}"`
+        : `${tbl}."${s.name}"`
+    })
+    return parts.join(', ')
+  }
+
+  // Default: left.*, right cols with r_ prefix
+  const rightCols = (d.rightColumns ?? [])
+    .map((c) => `__r."${c.name}" AS "r_${c.name}"`)
+    .join(', ')
+  return rightCols ? `__l.*, ${rightCols}` : '__l.*, __r.*'
+}
+
+/**
  * Build the SQL query that produces the output of `nodeId`.
  *
  * `outputHandle` is the sourceHandle the CALLER connected from.
@@ -96,10 +123,8 @@ export function buildNodeSQL(
         return `SELECT * FROM (${leftSQL}) __l CROSS JOIN (${rightSQL}) __r`
       }
 
-      const rightCols = (d.rightColumns ?? [])
-        .map((c) => `__r."${c.name}" AS "r_${c.name}"`)
-        .join(', ')
-      const selectClause = rightCols ? `__l.*, ${rightCols}` : '__l.*, __r.*'
+      // Build SELECT clause from columnSelection if available, otherwise default to all cols
+      const selectClause = buildJoinSelect(d)
 
       return (
         `SELECT ${selectClause} FROM (${leftSQL}) __l ` +
@@ -135,8 +160,27 @@ export function buildNodeSQL(
       const included = (d.colMap ?? []).filter((m) => m.included !== false)
       if (!included.length) return `SELECT * FROM (${inputSQL}) __dest`
 
-      const cols = included.map((m) => {
-        const destName = m.destCol || m.sourceCol
+      const cols = included.flatMap((m) => {
+        const destName = m.destCol || m.sourceCol || 'col'
+
+        // Custom column (user-created, no upstream source)
+        if (!m.sourceCol) {
+          if (!m.destCol) return []   // skip nameless custom cols
+
+          // Emitter wired to col-in-custom-{destCol} takes priority over typed expression
+          const colInEdge = edges.find(
+            (e) => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`
+          )
+          if (colInEdge) {
+            const expr = emitterExpression(colInEdge.source, nodes)
+            if (expr !== null) return [`(${expr}) AS "${m.destCol}"`]
+          }
+
+          // Fall back to typed SQL expression
+          const expr = m.customExpr?.trim()
+          if (!expr) return []   // skip incomplete custom cols
+          return [`(${expr}) AS "${m.destCol}"`]
+        }
 
         // If an emitter is wired to this column's col-in handle, substitute its expression
         const colInEdge = edges.find(
@@ -144,12 +188,12 @@ export function buildNodeSQL(
         )
         if (colInEdge) {
           const expr = emitterExpression(colInEdge.source, nodes)
-          if (expr !== null) return `(${expr}) AS "${destName}"`
+          if (expr !== null) return [`(${expr}) AS "${destName}"`]
         }
 
-        return m.destCol && m.destCol !== m.sourceCol
+        return [m.destCol && m.destCol !== m.sourceCol
           ? `"${m.sourceCol}" AS "${m.destCol}"`
-          : `"${m.sourceCol}"`
+          : `"${m.sourceCol}"`]
       })
       return `SELECT ${cols.join(', ')} FROM (${inputSQL}) __dest`
     }
@@ -342,6 +386,12 @@ export function buildNodeSQL(
       return buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
     }
 
+    case 'browse-schema': {
+      const d = node.data as BrowseSchemaNodeData
+      if (!d.csvPath) return null
+      return `SELECT * FROM read_csv_auto('${escapePath(d.csvPath)}')`
+    }
+
     default:
       return null
   }
@@ -362,6 +412,15 @@ export function getNodeOutputColumns(
 
     case 'join': {
       const d = node.data as JoinNodeData
+      const sel = (d.columnSelection ?? []).filter((s) => s.included)
+      if (sel.length > 0) {
+        return sel.map((s) => {
+          const src = (s.side === 'left' ? d.leftColumns : d.rightColumns) ?? []
+          const orig = src.find((c) => c.name === s.name)
+          return { name: s.alias || s.name, type: orig?.type ?? 'TEXT' }
+        })
+      }
+      // Default: all left + all right with r_ prefix
       const leftCols  = d.leftColumns ?? []
       const rightCols = (d.rightColumns ?? []).map((c) => ({ ...c, name: `r_${c.name}` }))
       return [...leftCols, ...rightCols]
@@ -383,9 +442,15 @@ export function getNodeOutputColumns(
       if (!colMap.length) return inputCols
       return colMap
         .filter((m) => m.included !== false)
-        .map((m) => {
+        .flatMap((m) => {
+          if (!m.sourceCol) {
+            // Custom column — only include if it has a name and expression
+            return m.destCol && m.customExpr?.trim()
+              ? [{ name: m.destCol, type: 'TEXT' as const }]
+              : []
+          }
           const orig = inputCols.find((c) => c.name === m.sourceCol)
-          return { name: m.destCol || m.sourceCol, type: orig?.type ?? 'TEXT' }
+          return [{ name: m.destCol || m.sourceCol, type: orig?.type ?? 'TEXT' }]
         })
     }
 
@@ -458,6 +523,9 @@ export function getNodeOutputColumns(
 
     case 'write-table':
       return (node.data as WriteTableNodeData).inputColumns ?? []
+
+    case 'browse-schema':
+      return (node.data as BrowseSchemaNodeData).columns ?? []
 
     default:
       return []

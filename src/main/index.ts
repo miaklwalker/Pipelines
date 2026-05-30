@@ -269,6 +269,25 @@ ipcMain.handle('pg:fetch-cached', async (_, config: PgConfig, query: string, for
   }
 })
 
+// List all user schemas and tables (+ views) in a PostgreSQL database
+ipcMain.handle('pg:list-tables', async (_, config: PgConfig): Promise<{ schema: string; name: string }[]> => {
+  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 8000 })
+  try {
+    const result = await pool.query(`
+      SELECT table_schema AS schema, table_name AS name
+      FROM information_schema.tables
+      WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+        AND table_type IN ('BASE TABLE', 'VIEW')
+      ORDER BY table_schema, table_name
+    `)
+    await pool.end()
+    return result.rows as { schema: string; name: string }[]
+  } catch (err) {
+    await pool.end().catch(() => {})
+    throw err
+  }
+})
+
 // Delete a cached CSV file
 ipcMain.handle('pg:clear-cache', async (_, csvPath: string): Promise<void> => {
   try { await fs.unlink(csvPath) } catch { /* already gone */ }

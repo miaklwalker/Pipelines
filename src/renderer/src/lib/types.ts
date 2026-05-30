@@ -29,12 +29,21 @@ export interface CSVNodeData extends Record<string, unknown> {
   columns: ColumnInfo[]
 }
 
+export interface JoinColSelection {
+  side: 'left' | 'right'
+  name: string    // original column name in its source table
+  alias: string   // output name (default: name for left, r_{name} for right)
+  included: boolean
+}
+
 export interface JoinNodeData extends Record<string, unknown> {
   joinType: 'INNER' | 'LEFT' | 'RIGHT' | 'FULL'
   leftKey: string
   rightKey: string
   leftColumns: ColumnInfo[]
   rightColumns: ColumnInfo[]
+  /** Optional column-level output selection. Undefined = include all (legacy behaviour). */
+  columnSelection?: JoinColSelection[]
 }
 
 export interface TransformNodeData extends Record<string, unknown> {
@@ -44,9 +53,12 @@ export interface TransformNodeData extends Record<string, unknown> {
 }
 
 export interface ColMapping {
+  /** Upstream column name. Empty string = custom column created in the node. */
   sourceCol: string
   destCol: string
   included: boolean
+  /** SQL expression used when sourceCol is empty (custom column). */
+  customExpr?: string
 }
 
 export interface DestinationNodeData extends Record<string, unknown> {
@@ -187,6 +199,26 @@ export interface ConditionalOutputData extends Record<string, unknown> {
   hasAnchor?: boolean
 }
 
+// ─── Schema browser ──────────────────────────────────────────────────────────
+
+export interface TableEntry {
+  schema: string
+  name: string
+}
+
+export interface BrowseSchemaNodeData extends Record<string, unknown> {
+  tables: TableEntry[]
+  selectedSchema: string | null
+  selectedTable: string | null
+  filter: string
+  csvPath: string | null
+  columns: ColumnInfo[]
+  rowCount: number | null
+  status: 'idle' | 'browsing' | 'fetching' | 'ready' | 'error'
+  error?: string
+  resolvedConfig?: PgConfig | null
+}
+
 // ─── Union node type ─────────────────────────────────────────────────────────
 
 export type AppNode =
@@ -209,5 +241,6 @@ export type AppNode =
   | Node<ReadTableNodeData,       'read-table'>
   | Node<ReadTableCachedNodeData, 'read-table-cached'>
   | Node<WriteTableNodeData,      'write-table'>
+  | Node<BrowseSchemaNodeData,    'browse-schema'>
 
 export type AppEdge = Edge

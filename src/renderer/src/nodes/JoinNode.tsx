@@ -1,7 +1,7 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
-import { GitMerge } from 'lucide-react'
-import type { AppNode, JoinNodeData } from '../lib/types'
+import { GitMerge, Check, X } from 'lucide-react'
+import type { AppNode, JoinNodeData, JoinColSelection } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 
@@ -12,7 +12,8 @@ const JOIN_TYPES = ['INNER', 'LEFT', 'RIGHT', 'FULL'] as const
 
 function JoinNode({ id, data, selected }: Props) {
   const { setNodes } = useReactFlow()
-  const { joinType, leftKey, rightKey, leftColumns = [], rightColumns = [] } = data
+  const { joinType, leftKey, rightKey, leftColumns = [], rightColumns = [], columnSelection = [] } = data
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const update = useCallback(
     (patch: Partial<JoinNodeData>) =>
@@ -25,9 +26,45 @@ function JoinNode({ id, data, selected }: Props) {
   const rightReady = rightColumns.length > 0
   const isReady    = leftReady && rightReady && !!leftKey && !!rightKey
 
-  const subtitle = leftReady && rightReady
-    ? `${leftColumns.length + rightColumns.length} cols`
-    : 'Connect two tables'
+  // Column selection helpers
+  const includedCount = columnSelection.filter((s) => s.included).length
+  const totalCount    = columnSelection.length
+
+  const toggleCol = useCallback((side: 'left' | 'right', name: string) => {
+    update({
+      columnSelection: columnSelection.map((s) =>
+        s.side === side && s.name === name ? { ...s, included: !s.included } : s
+      )
+    })
+  }, [columnSelection, update])
+
+  const setAlias = useCallback((side: 'left' | 'right', name: string, alias: string) => {
+    update({
+      columnSelection: columnSelection.map((s) =>
+        s.side === side && s.name === name ? { ...s, alias } : s
+      )
+    })
+  }, [columnSelection, update])
+
+  const toggleAllSide = useCallback((side: 'left' | 'right', included: boolean) => {
+    update({
+      columnSelection: columnSelection.map((s) =>
+        s.side === side ? { ...s, included } : s
+      )
+    })
+  }, [columnSelection, update])
+
+  // Subtitle
+  const subtitle = (() => {
+    if (!leftReady || !rightReady) return 'Connect two tables'
+    if (totalCount > 0 && includedCount < totalCount) return `${includedCount}/${totalCount} cols · ${joinType}`
+    return `${leftColumns.length + rightColumns.length} cols · ${joinType}`
+  })()
+
+  const leftSel  = columnSelection.filter((s) => s.side === 'left')
+  const rightSel = columnSelection.filter((s) => s.side === 'right')
+  const leftAllOn  = leftSel.length  > 0 && leftSel.every((s)  => s.included)
+  const rightAllOn = rightSel.length > 0 && rightSel.every((s) => s.included)
 
   return (
     <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
@@ -55,7 +92,12 @@ function JoinNode({ id, data, selected }: Props) {
         }}
       />
 
-      <NodeHeader def={joinDef} subtitle={subtitle} />
+      <NodeHeader
+        def={joinDef}
+        subtitle={subtitle}
+        advancedOpen={advancedOpen}
+        onAdvancedToggle={() => setAdvancedOpen((v) => !v)}
+      />
 
       <div className="node-body">
         <div className="node-body-row">
@@ -91,6 +133,42 @@ function JoinNode({ id, data, selected }: Props) {
         </div>
       </div>
 
+      {/* ── Advanced: column output selection ──────────────────────────────────── */}
+      {advancedOpen && columnSelection.length > 0 && (
+        <div className="join-col-panel" onMouseDown={stopProp}>
+
+          {/* Left columns */}
+          <JoinColGroup
+            label="Left columns"
+            labelColor="#60a5fa"
+            cols={leftSel}
+            allOn={leftAllOn}
+            onToggleAll={(on) => toggleAllSide('left', on)}
+            onToggle={(name) => toggleCol('left', name)}
+            onAlias={(name, alias) => setAlias('left', name, alias)}
+            stopProp={stopProp}
+          />
+
+          {/* Right columns */}
+          <JoinColGroup
+            label="Right columns"
+            labelColor="#34d399"
+            cols={rightSel}
+            allOn={rightAllOn}
+            onToggleAll={(on) => toggleAllSide('right', on)}
+            onToggle={(name) => toggleCol('right', name)}
+            onAlias={(name, alias) => setAlias('right', name, alias)}
+            stopProp={stopProp}
+          />
+        </div>
+      )}
+
+      {advancedOpen && columnSelection.length === 0 && (
+        <div style={{ padding: '8px 14px', fontSize: 11, color: 'var(--text-muted)' }}>
+          Connect both inputs to configure columns.
+        </div>
+      )}
+
       <div className="status-row">
         <div className={`status-dot ${isReady ? 'ready' : 'pending'}`} />
         <span className="status-text">
@@ -105,6 +183,69 @@ function JoinNode({ id, data, selected }: Props) {
   )
 }
 
+// ── Column group sub-component ─────────────────────────────────────────────────
+interface GroupProps {
+  label: string
+  labelColor: string
+  cols: JoinColSelection[]
+  allOn: boolean
+  onToggleAll: (on: boolean) => void
+  onToggle: (name: string) => void
+  onAlias: (name: string, alias: string) => void
+  stopProp: (e: React.MouseEvent) => void
+}
+
+function JoinColGroup({ label, labelColor, cols, allOn, onToggleAll, onToggle, onAlias, stopProp }: GroupProps) {
+  if (!cols.length) return null
+  return (
+    <div className="join-col-group">
+      {/* Group header */}
+      <div className="join-col-group-hdr">
+        <span style={{ color: labelColor, fontWeight: 700 }}>{label}</span>
+        <button
+          className="join-col-all-btn"
+          onClick={(e) => { stopProp(e); onToggleAll(!allOn) }}
+        >
+          {allOn ? 'None' : 'All'}
+        </button>
+      </div>
+
+      {/* Column rows */}
+      {cols.map((s) => (
+        <div key={s.name} className={`join-col-row${s.included ? '' : ' excluded'}`}>
+          {/* Toggle */}
+          <button
+            className={`join-col-toggle ${s.included ? 'on' : 'off'}`}
+            onClick={(e) => { stopProp(e); onToggle(s.name) }}
+            title={s.included ? 'Exclude' : 'Include'}
+          >
+            {s.included
+              ? <Check size={9} strokeWidth={2.5} />
+              : <X     size={9} strokeWidth={2.5} />}
+          </button>
+
+          {/* Source name */}
+          <span className="join-col-src" title={s.name}>{s.name}</span>
+
+          {/* Arrow */}
+          <span className="join-col-arrow">→</span>
+
+          {/* Alias input */}
+          <input
+            className="join-col-alias"
+            value={s.alias}
+            placeholder={s.name}
+            disabled={!s.included}
+            onChange={(e) => onAlias(s.name, e.target.value)}
+            onClick={stopProp}
+            title="Output column name"
+          />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 const Memoized = memo(JoinNode)
 
 // ── Node definition & registration ───────────────────────────────────────────
@@ -114,14 +255,15 @@ export const joinDef: NodeDef<JoinNodeData> = {
   name: 'Join',
   desc: 'Merge two tables on a key',
   Icon: GitMerge,
+  hasAdvanced: true,
   help: {
-    summary: 'Combines two row streams into one using a SQL JOIN on matching key columns.',
+    summary: 'Combines two row streams into one using a SQL JOIN on matching key columns. Use the advanced panel to choose exactly which columns to emit and rename them.',
     inputs: 'Two row streams: left table (top handle) and right table (bottom handle).',
-    outputs: 'One merged row stream. Right-side column names are prefixed with "r_" to avoid collisions.',
+    outputs: 'One merged row stream. By default right-side columns are prefixed with "r_". Use the ⚙ panel to rename or exclude any column.',
     tips: [
-      'INNER keeps only matching rows; LEFT keeps all left rows.',
-      'Right-side columns appear as "r_colname" in downstream nodes.',
-      'Click to preview the merged result before connecting further.',
+      'INNER keeps only matching rows; LEFT keeps all left rows (NULLs for unmatched right).',
+      'Open ⚙ Advanced to exclude columns or rename them before they reach downstream nodes.',
+      'Deselect the join-key columns on one side to avoid duplicate key columns in the output.',
     ],
   },
   inputPorts: [{ type: 'row' }, { type: 'row' }],

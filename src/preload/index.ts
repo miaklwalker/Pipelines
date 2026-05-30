@@ -7,6 +7,7 @@ export type ExportResult    = { filePath: string; rowCount: number | null }
 export type PgConfig        = { host: string; port: number; database: string; user: string; password: string; ssl: boolean }
 export type PgFetchResult   = { csvPath: string; columns: ColumnInfo[]; rowCount: number; fromCache?: boolean; cacheDate?: string }
 export type PgWriteResult   = { rowCount: number }
+export type TableEntry      = { schema: string; name: string }
 
 const api = {
   // CSV
@@ -24,6 +25,7 @@ const api = {
   pgFetchCached: (config: PgConfig, query: string, force: boolean): Promise<PgFetchResult> => ipcRenderer.invoke('pg:fetch-cached', config, query, force),
   pgClearCache: (csvPath: string): Promise<void> => ipcRenderer.invoke('pg:clear-cache', csvPath),
   pgWrite: (config: PgConfig, sql: string, tableName: string, writeMode: string): Promise<PgWriteResult> => ipcRenderer.invoke('pg:write', config, sql, tableName, writeMode),
+  pgListTables: (config: PgConfig): Promise<TableEntry[]> => ipcRenderer.invoke('pg:list-tables', config),
 }
 
 contextBridge.exposeInMainWorld('api', api)

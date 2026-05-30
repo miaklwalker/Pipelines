@@ -13,9 +13,10 @@ import {
   type OnEdgesChange,
   type Connection,
   type IsValidConnection,
+  type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { FolderOpen, Save } from 'lucide-react'
+import { FolderOpen, Save, Play, Loader } from 'lucide-react'
 
 import { v4 as uuid } from 'uuid'
 import { buildNodeSQL } from './lib/sqlBuilder'
@@ -27,6 +28,7 @@ import type {
   UniqueNodeData, MapValueData, ConditionalOutputData,
   SortNodeData, LimitNodeData, AggregateNodeData,
   ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
+  BrowseSchemaNodeData,
   PreviewResult,
 } from './lib/types'
 
@@ -48,9 +50,9 @@ function edgeClass(connection: Connection | AppEdge): string {
   return 'row-edge'
 }
 
-// ── Position helper ───────────────────────────────────────────────────────────
+// ── Fallback position helper (used before ReactFlow mounts) ───────────────────
 let nodeCounter = 0
-function nextPosition() {
+function fallbackPosition() {
   const y = 160 + (nodeCounter % 5) * 48
   const x = 260 + Math.floor(nodeCounter / 5) * 340
   nodeCounter++
@@ -105,8 +107,15 @@ function nodeLabel(node: AppNode | undefined): string {
   if (node.type === 'read-table')         return (node.data as ReadTableNodeData).tableName || 'Read Table'
   if (node.type === 'read-table-cached')  return (node.data as ReadTableCachedNodeData).tableName || 'Read (Cached)'
   if (node.type === 'write-table')        return (node.data as WriteTableNodeData).tableName || 'Write Table'
+  if (node.type === 'browse-schema') {
+    const d = node.data as BrowseSchemaNodeData
+    return d.selectedTable ? `${d.selectedSchema}.${d.selectedTable}` : 'Browse Schema'
+  }
   return ''
 }
+
+// ── Pipeline execution phase ──────────────────────────────────────────────────
+type ExecPhase = 'idle' | 'running' | 'done' | 'error'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -122,6 +131,27 @@ export default function App() {
   const [previewResult,  setPreviewResult]  = useState<PreviewResult | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError,   setPreviewError]   = useState<string | null>(null)
+
+  // Pipeline execution state — maps nodeId → exec phase for visual feedback
+  const [nodeExecState, setNodeExecState] = useState<Record<string, ExecPhase>>({})
+  const [isExecuting, setIsExecuting] = useState(false)
+
+  // ReactFlow instance — used to convert screen coords to flow coords for spawning
+  const rfRef = useRef<ReactFlowInstance<AppNode, AppEdge> | null>(null)
+
+  /** Returns the center of the visible canvas in flow-space, with a small jitter. */
+  const spawnPosition = useCallback(() => {
+    const rf = rfRef.current
+    if (!rf) return fallbackPosition()
+    const el = document.querySelector('.react-flow') as HTMLElement | null
+    if (!el) return fallbackPosition()
+    const rect = el.getBoundingClientRect()
+    const jitter = () => (Math.random() - 0.5) * 80   // ±40 px so quick multi-drops don't stack
+    return rf.screenToFlowPosition({
+      x: rect.left + rect.width  / 2 + jitter(),
+      y: rect.top  + rect.height / 2 + jitter(),
+    })
+  }, [])
 
   // Topbar toast
   const [toast, setToast] = useState('')
@@ -220,117 +250,123 @@ export default function App() {
         const result = await window.api.selectCSV()
         if (!result) return
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'csv-input', position: nextPosition(),
+          id: uuid(), type: 'csv-input', position: spawnPosition(),
           data: { fileName: result.fileName, filePath: result.filePath, columns: result.columns } satisfies CSVNodeData,
         }])
         break
       }
       case 'join':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'join', position: nextPosition(),
+          id: uuid(), type: 'join', position: spawnPosition(),
           data: { joinType: 'INNER', leftKey: '', rightKey: '', leftColumns: [], rightColumns: [] } satisfies JoinNodeData,
         }])
         break
       case 'transform':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'transform', position: nextPosition(),
+          id: uuid(), type: 'transform', position: spawnPosition(),
           data: { expressions: [], keepAll: true, inputColumns: [] } satisfies TransformNodeData,
         }])
         break
       case 'destination':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'destination', position: nextPosition(),
+          id: uuid(), type: 'destination', position: spawnPosition(),
           data: { label: 'Output', inputColumns: [], colMap: [] } satisfies DestinationNodeData,
         }])
         break
       case 'csv-output':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'csv-output', position: nextPosition(),
+          id: uuid(), type: 'csv-output', position: spawnPosition(),
           data: { outputPath: '', includeHeader: true, inputColumns: [], lastExport: null, delimiter: 'comma' } satisfies CSVOutputNodeData,
         }])
         break
       case 'merge':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'merge', position: nextPosition(),
+          id: uuid(), type: 'merge', position: spawnPosition(),
           data: { inputColumns: [] } satisfies MergeNodeData,
         }])
         break
       case 'filter':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'filter', position: nextPosition(),
+          id: uuid(), type: 'filter', position: spawnPosition(),
           data: { condition: '', inputColumns: [] } satisfies FilterNodeData,
         }])
         break
       case 'static-value':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'static-value', position: nextPosition(),
+          id: uuid(), type: 'static-value', position: spawnPosition(),
           data: { columnName: 'value', value: '', hasAnchor: false } satisfies StaticValueData,
         }])
         break
       case 'increment-value':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'increment-value', position: nextPosition(),
+          id: uuid(), type: 'increment-value', position: spawnPosition(),
           data: { columnName: 'index', startAt: 1, hasAnchor: false } satisfies IncrementValueData,
         }])
         break
       case 'unique':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'unique', position: nextPosition(),
+          id: uuid(), type: 'unique', position: spawnPosition(),
           data: { keyColumn: '', keep: 'first', inputColumns: [] } satisfies UniqueNodeData,
         }])
         break
       case 'map-value':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'map-value', position: nextPosition(),
+          id: uuid(), type: 'map-value', position: spawnPosition(),
           data: { columnName: 'mapped', sourceColumn: '', mappings: [], hasAnchor: false } satisfies MapValueData,
         }])
         break
       case 'conditional-output':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'conditional-output', position: nextPosition(),
+          id: uuid(), type: 'conditional-output', position: spawnPosition(),
           data: { columnName: 'result', conditions: [], fallback: '', hasAnchor: false } satisfies ConditionalOutputData,
         }])
         break
       case 'sort':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'sort', position: nextPosition(),
+          id: uuid(), type: 'sort', position: spawnPosition(),
           data: { sortKeys: [], inputColumns: [] } satisfies SortNodeData,
         }])
         break
       case 'limit':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'limit', position: nextPosition(),
+          id: uuid(), type: 'limit', position: spawnPosition(),
           data: { count: 100, offset: 0 } satisfies LimitNodeData,
         }])
         break
       case 'aggregate':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'aggregate', position: nextPosition(),
+          id: uuid(), type: 'aggregate', position: spawnPosition(),
           data: { groupBy: [], aggregations: [], inputColumns: [] } satisfies AggregateNodeData,
         }])
         break
       case 'connection':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'connection', position: nextPosition(),
+          id: uuid(), type: 'connection', position: spawnPosition(),
           data: { config: { host: 'localhost', port: 5432, database: '', user: '', password: '', ssl: false }, testStatus: 'idle' } satisfies ConnectionNodeData,
         }])
         break
       case 'read-table':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'read-table', position: nextPosition(),
+          id: uuid(), type: 'read-table', position: spawnPosition(),
           data: { readMode: 'table', tableName: '', customSQL: '', csvPath: null, columns: [], rowCount: null, status: 'idle', resolvedConfig: null } satisfies ReadTableNodeData,
         }])
         break
       case 'read-table-cached':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'read-table-cached', position: nextPosition(),
+          id: uuid(), type: 'read-table-cached', position: spawnPosition(),
           data: { readMode: 'table', tableName: '', customSQL: '', csvPath: null, columns: [], rowCount: null, status: 'idle', resolvedConfig: null, cacheDate: null } satisfies ReadTableCachedNodeData,
         }])
         break
       case 'write-table':
         setNodes((ns) => [...ns, {
-          id: uuid(), type: 'write-table', position: nextPosition(),
+          id: uuid(), type: 'write-table', position: spawnPosition(),
           data: { tableName: '', writeMode: 'append', status: 'idle', rowCount: null, inputColumns: [], resolvedConfig: null } satisfies WriteTableNodeData,
+        }])
+        break
+      case 'browse-schema':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'browse-schema', position: spawnPosition(),
+          data: { tables: [], selectedSchema: null, selectedTable: null, filter: '', csvPath: null, columns: [], rowCount: null, status: 'idle', resolvedConfig: null } satisfies BrowseSchemaNodeData,
         }])
         break
     }
@@ -401,6 +437,66 @@ export default function App() {
     })
   }, [edges, previewNodeId])
 
+  // ── Display nodes: apply per-node execution class during pipeline run ────────
+  const displayNodes = useMemo(() => {
+    if (!Object.keys(nodeExecState).length) return nodes
+    return nodes.map((n) => {
+      const phase = nodeExecState[n.id]
+      return phase ? { ...n, className: `node-exec-${phase}` } : n
+    })
+  }, [nodes, nodeExecState])
+
+  // ── Execute pipeline — runs all write-table / csv-output sinks in order ───────
+  const executePipeline = useCallback(async () => {
+    const sinkNodes = nodesRef.current.filter((n) =>
+      (n.type === 'write-table' && (n.data as WriteTableNodeData).resolvedConfig && (n.data as WriteTableNodeData).tableName) ||
+      n.type === 'csv-output'
+    )
+    if (!sinkNodes.length) {
+      showToast('No output nodes — add a Write Table or CSV Export node')
+      return
+    }
+
+    setIsExecuting(true)
+    // Dim all nodes to 'idle' at the start of the run
+    const initState: Record<string, ExecPhase> = {}
+    nodesRef.current.forEach((n) => { initState[n.id] = 'idle' })
+    setNodeExecState(initState)
+
+    for (const sink of sinkNodes) {
+      setNodeExecState((s) => ({ ...s, [sink.id]: 'running' }))
+      try {
+        if (sink.type === 'write-table') {
+          const d = sink.data as WriteTableNodeData
+          const inputEdge = edgesRef.current.find((e) => e.target === sink.id && e.targetHandle === 'row-in')
+          if (!inputEdge) throw new Error('No data input connected to Write Table')
+          const sql = buildNodeSQL(inputEdge.source, nodesRef.current, edgesRef.current, inputEdge.sourceHandle ?? undefined)
+          if (!sql) throw new Error('Could not build upstream SQL for Write Table')
+          const result = await window.api.pgWrite(d.resolvedConfig!, sql, d.tableName, d.writeMode)
+          showToast(`✓ Wrote ${result.rowCount.toLocaleString()} rows → ${d.tableName}`)
+        } else if (sink.type === 'csv-output') {
+          const sql = buildNodeSQL(sink.id, nodesRef.current, edgesRef.current)
+          if (!sql) throw new Error('Could not build SQL for CSV Export')
+          const result = await window.api.exportCSV(sql)
+          if (!result) {
+            // User cancelled the save dialog — reset this node to idle
+            setNodeExecState((s) => ({ ...s, [sink.id]: 'idle' }))
+            continue
+          }
+          showToast(`✓ Exported ${result.rowCount?.toLocaleString() ?? '?'} rows`)
+        }
+        setNodeExecState((s) => ({ ...s, [sink.id]: 'done' }))
+      } catch (err) {
+        setNodeExecState((s) => ({ ...s, [sink.id]: 'error' }))
+        showToast(`✗ ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
+    setIsExecuting(false)
+    // Hold the done/error state for 2.5 s so the user can see the result, then clear
+    setTimeout(() => setNodeExecState({}), 2500)
+  }, [showToast])
+
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="app-layout">
@@ -423,6 +519,16 @@ export default function App() {
             <Save size={13} strokeWidth={1.75} />
             {currentFilePath ? 'Save' : 'Save…'}
           </button>
+          <button
+            className="topbar-btn topbar-btn-run"
+            onClick={executePipeline}
+            disabled={isExecuting || nodes.length === 0}
+            title="Run all output nodes (Write Table + CSV Export)"
+          >
+            {isExecuting
+              ? <><Loader size={13} strokeWidth={1.75} className="spin" />Running…</>
+              : <><Play size={13} strokeWidth={1.75} />Run</>}
+          </button>
         </div>
       </header>
 
@@ -431,9 +537,10 @@ export default function App() {
 
         <div className="canvas-wrap">
           <ReactFlow
-            nodes={nodes}
+            nodes={displayNodes}
             edges={displayEdges}
             nodeTypes={NODE_TYPES}
+            onInit={(instance) => { rfRef.current = instance as ReactFlowInstance<AppNode, AppEdge> }}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}

@@ -19,6 +19,7 @@ import './ConnectionNode'
 import './ReadTableNode'
 import './ReadTableCachedNode'
 import './WriteTableNode'
+import './BrowseSchemaNode'
 
 // Build the stable ReactFlow nodeTypes map once, after all nodes are registered.
 import { buildNodeTypes } from './registry'
