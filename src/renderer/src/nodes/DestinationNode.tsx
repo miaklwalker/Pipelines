@@ -1,218 +1,224 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
-import { Database, Check, X, Plus } from 'lucide-react'
-import type { AppNode, DestinationNodeData, ColMapping } from '../lib/types'
+import { Database, Check, X, Plus, GripVertical } from 'lucide-react'
+import type { AppNode, AppEdge, DestinationNodeData, ColMapping } from '../lib/types'
+import { propagateColumns } from '../lib/graphUtils'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle, colHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: DestinationNodeData }>
 
 function DestinationNode({ id, data, selected }: Props) {
-  const { setNodes } = useReactFlow()
+  const { setNodes, getEdges } = useReactFlow()
   const { inputColumns = [], colMap = [] } = data
   const hasInput = inputColumns.length > 0
 
+  // Drag state
+  const [dragIndex,     setDragIndex]     = useState<number | null>(null)
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+
+  // update: applies the patch then immediately re-propagates column info to
+  // all downstream nodes, so they don't need an edge change to refresh.
   const update = useCallback(
     (patch: Partial<DestinationNodeData>) =>
-      setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n))),
-    [id, setNodes]
+      setNodes((ns) => {
+        const updated = ns.map((n) => n.id === id ? { ...n, data: { ...n.data, ...patch } } : n)
+        return propagateColumns(updated as AppNode[], getEdges() as AppEdge[])
+      }),
+    [id, setNodes, getEdges]
   )
-
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
-  // ── Pass-through column actions ─────────────────────────────────────────────
-  const setDestName = useCallback((sourceCol: string, destCol: string) => {
-    update({ colMap: colMap.map((m) => m.sourceCol === sourceCol ? { ...m, destCol } : m) })
+  // ── Column mutations (all index-based for simplicity) ─────────────────────
+  const updateCol = useCallback((index: number, patch: Partial<ColMapping>) => {
+    update({ colMap: colMap.map((m, i) => i === index ? { ...m, ...patch } : m) })
   }, [colMap, update])
 
-  const toggleIncluded = useCallback((sourceCol: string) => {
-    update({ colMap: colMap.map((m) => m.sourceCol === sourceCol ? { ...m, included: !m.included } : m) })
+  const removeCol = useCallback((index: number) => {
+    update({ colMap: colMap.filter((_, i) => i !== index) })
   }, [colMap, update])
-
-  // ── Custom column actions ───────────────────────────────────────────────────
-  const customCols = colMap.filter((m) => !m.sourceCol)
 
   const addCustomCol = useCallback(() => {
-    const newCol: ColMapping = { sourceCol: '', destCol: '', included: true, customExpr: '' }
-    update({ colMap: [...colMap, newCol] })
+    update({ colMap: [...colMap, { sourceCol: '', destCol: '', included: true, customExpr: '' }] })
   }, [colMap, update])
 
-  /** Update a custom col by its stable uuid-ish key (we use index for now, keyed by destCol) */
-  const updateCustomCol = useCallback((idx: number, patch: Partial<ColMapping>) => {
-    let customIdx = 0
-    update({
-      colMap: colMap.map((m) => {
-        if (!m.sourceCol) {
-          if (customIdx === idx) { customIdx++; return { ...m, ...patch } }
-          customIdx++
-        }
-        return m
-      })
-    })
-  }, [colMap, update])
+  // ── Drag handlers ─────────────────────────────────────────────────────────
+  const onDragStart = useCallback((e: React.DragEvent, index: number) => {
+    e.stopPropagation()
+    setDragIndex(index)
+    e.dataTransfer.effectAllowed = 'move'
+    // Transparent ghost so the cursor is the only drag indicator
+    const ghost = document.createElement('div')
+    ghost.style.cssText = 'position:fixed;top:-999px'
+    document.body.appendChild(ghost)
+    e.dataTransfer.setDragImage(ghost, 0, 0)
+    setTimeout(() => document.body.removeChild(ghost), 0)
+  }, [])
 
-  const removeCustomCol = useCallback((idx: number) => {
-    let customIdx = 0
-    update({
-      colMap: colMap.filter((m) => {
-        if (!m.sourceCol) {
-          const keep = customIdx !== idx
-          customIdx++
-          return keep
-        }
-        return true
-      })
-    })
-  }, [colMap, update])
+  const onDragOver = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverIndex(index)
+  }, [])
 
-  // ── Subtitle ────────────────────────────────────────────────────────────────
+  const onDrop = useCallback((e: React.DragEvent, dropIndex: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (dragIndex !== null && dragIndex !== dropIndex) {
+      const next = [...colMap]
+      const [item] = next.splice(dragIndex, 1)
+      next.splice(dropIndex, 0, item)
+      update({ colMap: next })
+    }
+    setDragIndex(null)
+    setDragOverIndex(null)
+  }, [dragIndex, colMap, update])
+
+  const onDragEnd = useCallback(() => {
+    setDragIndex(null)
+    setDragOverIndex(null)
+  }, [])
+
+  // ── Derived ───────────────────────────────────────────────────────────────
   const includedCount = colMap.filter((m) => m.included !== false).length
-  const totalCount = colMap.length
-  const subtitle = totalCount > 0
-    ? `${includedCount} / ${totalCount} columns`
+  const subtitle = colMap.length > 0
+    ? `${includedCount} / ${colMap.length} columns`
     : hasInput ? 'Add or filter columns' : 'No input connected'
 
+  const hasAny = hasInput || colMap.some((m) => !m.sourceCol)
+
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       {/* Row input */}
       <Handle type="target" position={Position.Left} id="row-in"
-        style={{
-          top: '50%', left: -7, width: 13, height: 13, borderRadius: 3,
-          background: hasInput ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${hasInput ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(hasInput, { top: '50%', left: -7 })}
       />
       {/* Row output */}
       <Handle type="source" position={Position.Right} id="row-out"
-        style={{
-          top: '50%', right: -7, width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, { top: '50%', right: -7 })}
       />
 
       <NodeHeader def={destinationDef} subtitle={subtitle} />
 
-      {/* ── Pass-through columns ─────────────────────────────────────────────── */}
-      {hasInput && (
+      {/* ── Unified column list ─────────────────────────────────────────────── */}
+      {colMap.length > 0 && (
         <div className="column-list">
-          {/* Header */}
-          <div style={{
-            display: 'flex', alignItems: 'center', padding: '3px 14px',
-            borderBottom: '1px solid var(--border)', gap: 4,
-          }}>
-            <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', flex: 1 }}>Source</span>
-            <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', width: 90, textAlign: 'center' }}>Output name</span>
-            <span style={{ width: 22 }} />
+          {/* Column header */}
+          <div className="dest-list-header nodrag">
+            <span style={{ width: 14, flexShrink: 0 }} />
+            <span className="dest-list-hdr-label" style={{ flex: 1 }}>Source / Expression</span>
+            <span className="dest-list-hdr-label" style={{ width: 80 }}>Output name</span>
+            <span style={{ width: 20 }} />
           </div>
 
-          {inputColumns.map((col) => {
-            const mapping: ColMapping = colMap.find((m) => m.sourceCol === col.name)
-              ?? { sourceCol: col.name, destCol: col.name, included: true }
-            const isExcluded = mapping.included === false
+          {colMap.map((m, index) => {
+            const isPass    = !!m.sourceCol
+            const isExcluded = m.included === false
+            const isDragging = dragIndex === index
+            const isDragOver = dragOverIndex === index && dragIndex !== index
+
+            const rowCls = [
+              isPass ? 'dest-column-row' : 'dest-custom-row',
+              'nodrag',          // tell React Flow: don't treat mousedown here as node drag
+              isDragging ? 'dest-dragging' : '',
+              isDragOver ? 'dest-drag-over' : '',
+            ].filter(Boolean).join(' ')
 
             return (
-              <div key={col.name} className="dest-column-row" style={{ opacity: isExcluded ? 0.4 : 1 }}>
-                {/* Column emitter input handle */}
-                <Handle type="target" position={Position.Left} id={`col-in-${col.name}`}
-                  style={{ width: 10, height: 10, borderRadius: '50%', background: '#22c55e', border: '2px solid var(--green-dark)' }}
+              <div
+                key={isPass ? m.sourceCol : `custom-${index}`}
+                className={rowCls}
+                style={isPass ? { opacity: isExcluded ? 0.4 : 1 } : undefined}
+                draggable
+                onDragStart={(e) => onDragStart(e, index)}
+                onDragOver={(e) => onDragOver(e, index)}
+                onDrop={(e) => onDrop(e, index)}
+                onDragEnd={onDragEnd}
+              >
+                {/* Drag grip — mouseDown stops node-drag, not column interaction */}
+                <GripVertical
+                  size={11}
+                  className="dest-grip"
+                  onMouseDown={(e) => { e.stopPropagation() }}
                 />
 
-                {/* Source name (read-only) */}
-                <span style={{
-                  fontSize: 11, color: 'var(--text-dim)', flex: 1,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  textDecoration: isExcluded ? 'line-through' : 'none',
-                }}>
-                  {col.name}
-                </span>
-
-                {/* Editable output name */}
-                <input
-                  className="col-rename-input"
-                  value={mapping.destCol}
-                  title="Click to rename output column"
-                  onChange={(e) => setDestName(col.name, e.target.value)}
-                  onClick={stopProp} onMouseDown={stopProp}
-                  disabled={isExcluded}
-                />
-
-                {/* Include / exclude toggle */}
-                <button
-                  className={`col-toggle ${isExcluded ? 'col-toggle-off' : 'col-toggle-on'}`}
-                  title={isExcluded ? 'Include column' : 'Exclude column'}
-                  onClick={(e) => { stopProp(e); toggleIncluded(col.name) }}
-                  onMouseDown={stopProp}
-                >
-                  {isExcluded
-                    ? <X size={10} strokeWidth={2.5} />
-                    : <Check size={10} strokeWidth={2.5} />
-                  }
-                </button>
-
-                {/* Column output handle */}
-                <Handle type="source" position={Position.Right} id={`col-out-${col.name}`}
-                  style={{ width: 10, height: 10, borderRadius: '50%', background: '#22c55e', border: '2px solid var(--green-dark)' }}
-                />
+                {isPass ? (
+                  // ── Pass-through column ─────────────────────────────────
+                  <>
+                    <Handle type="target" position={Position.Left} id={`col-in-${m.sourceCol}`}
+                      style={colHandle({ width: 10, height: 10 })}
+                    />
+                    <span className="dest-src-name" style={{ textDecoration: isExcluded ? 'line-through' : 'none' }}>
+                      {m.sourceCol}
+                    </span>
+                    <input
+                      className="col-rename-input"
+                      value={m.destCol}
+                      title="Rename output column"
+                      onChange={(e) => updateCol(index, { destCol: e.target.value })}
+                      onClick={stopProp} onMouseDown={stopProp}
+                      disabled={isExcluded}
+                    />
+                    <button
+                      className={`col-toggle ${isExcluded ? 'col-toggle-off' : 'col-toggle-on'}`}
+                      title={isExcluded ? 'Include' : 'Exclude'}
+                      onClick={(e) => { stopProp(e); updateCol(index, { included: !m.included }) }}
+                      onMouseDown={stopProp}
+                    >
+                      {isExcluded
+                        ? <X size={10} strokeWidth={2.5} />
+                        : <Check size={10} strokeWidth={2.5} />}
+                    </button>
+                    <Handle type="source" position={Position.Right} id={`col-out-${m.sourceCol}`}
+                      style={colHandle({ width: 10, height: 10 })}
+                    />
+                  </>
+                ) : (
+                  // ── Custom column ───────────────────────────────────────
+                  <>
+                    {m.destCol && (
+                      <Handle type="target" position={Position.Left} id={`col-in-custom-${m.destCol}`}
+                        style={colHandle({ width: 10, height: 10 })}
+                      />
+                    )}
+                    <input
+                      className="dest-custom-input dest-custom-name"
+                      value={m.destCol}
+                      placeholder="col_name"
+                      onChange={(e) => updateCol(index, { destCol: e.target.value })}
+                      onClick={stopProp} onMouseDown={stopProp}
+                    />
+                    <span className="dest-custom-eq">=</span>
+                    <input
+                      className="dest-custom-input dest-custom-expr"
+                      value={m.customExpr ?? ''}
+                      placeholder="expression"
+                      title="SQL expression. Wiring an emitter node overrides this."
+                      onChange={(e) => updateCol(index, { customExpr: e.target.value })}
+                      onClick={stopProp} onMouseDown={stopProp}
+                    />
+                    <button
+                      className="dest-custom-remove"
+                      title="Remove column"
+                      onClick={(e) => { stopProp(e); removeCol(index) }}
+                      onMouseDown={stopProp}
+                    >
+                      <X size={9} strokeWidth={2.5} />
+                    </button>
+                    {m.destCol && (
+                      <Handle type="source" position={Position.Right} id={`col-out-${m.destCol}`}
+                        style={colHandle({ width: 10, height: 10 })}
+                      />
+                    )}
+                  </>
+                )}
               </div>
             )
           })}
-        </div>
-      )}
-
-      {/* ── Custom columns ───────────────────────────────────────────────────── */}
-      {customCols.length > 0 && (
-        <div className="dest-custom-section">
-          <div className="dest-custom-header">
-            <span>Custom Columns</span>
-            <span style={{ opacity: 0.5, fontSize: 9 }}>SQL expression → name</span>
-          </div>
-          {customCols.map((m, idx) => (
-            <div key={idx} className="dest-custom-row" onMouseDown={stopProp}>
-              {/* Col-in handle — accepts emitter wires (only when name is set) */}
-              {m.destCol && (
-                <Handle
-                  type="target" position={Position.Left}
-                  id={`col-in-custom-${m.destCol}`}
-                  style={{ width: 10, height: 10, borderRadius: '50%', background: '#22c55e', border: '2px solid var(--green-dark)' }}
-                />
-              )}
-
-              {/* Output name */}
-              <input
-                className="dest-custom-input dest-custom-name"
-                value={m.destCol}
-                placeholder="col_name"
-                title="Output column name"
-                onChange={(e) => updateCustomCol(idx, { destCol: e.target.value })}
-                onClick={stopProp}
-              />
-              <span className="dest-custom-eq">=</span>
-              {/* SQL expression (falls back to emitter if one is wired) */}
-              <input
-                className="dest-custom-input dest-custom-expr"
-                value={m.customExpr ?? ''}
-                placeholder="expression or wire emitter ↖"
-                title="SQL expression (e.g. 'US', price * 1.1, UPPER(name)). Wiring an emitter node overrides this."
-                onChange={(e) => updateCustomCol(idx, { customExpr: e.target.value })}
-                onClick={stopProp}
-              />
-              {/* Remove */}
-              <button
-                className="dest-custom-remove"
-                title="Remove custom column"
-                onClick={(e) => { stopProp(e); removeCustomCol(idx) }}
-              >
-                <X size={9} strokeWidth={2.5} />
-              </button>
-              {/* Col-out handle (only when name is set) */}
-              {m.destCol && (
-                <Handle type="source" position={Position.Right} id={`col-out-${m.destCol}`}
-                  style={{ width: 10, height: 10, borderRadius: '50%', background: '#22c55e', border: '2px solid var(--green-dark)' }}
-                />
-              )}
-            </div>
-          ))}
         </div>
       )}
 
@@ -228,19 +234,19 @@ function DestinationNode({ id, data, selected }: Props) {
         </button>
       </div>
 
-      {!hasInput && colMap.filter(m => !m.sourceCol).length === 0 && (
-        <div style={{ padding: '6px 14px 8px', color: 'var(--text-muted)', fontSize: 11 }}>
-          Connect a row input or add custom columns above.
+      {!hasAny && (
+        <div style={{ padding: '0 14px 8px', color: 'var(--text-muted)', fontSize: 11 }}>
+          Connect a row input or add custom columns.
         </div>
       )}
 
       <div className="status-row">
-        <div className={`status-dot ${hasInput || customCols.length > 0 ? 'ready' : 'pending'}`} />
+        <div className={`status-dot ${hasAny ? 'ready' : 'pending'}`} />
         <span className="status-text">
-          {hasInput || customCols.length > 0 ? 'Ready — click to preview' : 'Awaiting input'}
+          {hasAny ? 'Ready — click to preview' : 'Awaiting input'}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 
@@ -251,17 +257,17 @@ export const destinationDef: NodeDef<DestinationNodeData> = {
   type: 'destination',
   category: 'output',
   name: 'Destination',
-  desc: 'Shape output columns: rename, filter, or add new ones',
+  desc: 'Shape output columns: rename, filter, reorder, or add new ones',
   Icon: Database,
   help: {
-    summary: 'Maps the incoming row stream to a final output schema. Pass through upstream columns (rename/exclude), or create new ones using any SQL expression.',
+    summary: 'Maps the incoming row stream to a final output schema. Drag rows to reorder, rename or exclude upstream columns, or add computed columns via SQL expressions.',
     inputs: 'One row stream (left square). Emitter nodes (green circles) can override specific column values.',
     outputs: 'A remapped row stream (right square) and per-column handles for each included column.',
     tips: [
+      'Drag the ⠿ grip to reorder any column — mix pass-through and custom columns freely.',
       'Edit the "Output name" field to rename a column in the result.',
-      'Use the check/cross toggle to include or exclude an upstream column.',
-      'Click "+ Add Column" to create a computed column using any SQL expression.',
-      'Custom column expressions can reference upstream columns by name, e.g. UPPER("name") or price * 1.1.',
+      'Use ✓/✗ to include or exclude an upstream column.',
+      'Click "+ Add Column" to create a computed column with any SQL expression.',
     ],
   },
   inputPorts: [{ type: 'row' }, { type: 'col' }],

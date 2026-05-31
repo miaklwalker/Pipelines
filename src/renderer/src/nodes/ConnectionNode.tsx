@@ -4,6 +4,8 @@ import { Database, CheckCircle, XCircle, Loader } from 'lucide-react'
 import type { AppNode, ConnectionNodeData, PgConfig } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { connHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ConnectionNodeData }>
@@ -42,13 +44,10 @@ function ConnectionNode({ id, data, selected }: Props) {
   const subtitle = isReady ? `${config.user}@${config.host}:${config.port}/${config.database}` : 'Configure connection'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Database connection provider">
+    <PipelineNode selected={selected} title="Database connection provider">
       {/* conn-out handle — violet square */}
       <Handle type="source" position={Position.Right} id="conn-out"
-        style={{
-          top: '50%', right: -7, width: 13, height: 13, borderRadius: 3,
-          background: '#7c3aed', border: '2px solid #5b21b6',
-        }}
+        style={connHandle(true, { top: '50%', right: -7 })}
       />
 
       <NodeHeader def={connectionDef} subtitle={subtitle} />
@@ -161,7 +160,7 @@ function ConnectionNode({ id, data, selected }: Props) {
           conn out <div style={{ width: 8, height: 8, borderRadius: 2, background: '#7c3aed', border: '1px solid #5b21b6' }} />
         </div>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

@@ -444,8 +444,8 @@ html, body, #root {
   display: flex;
   align-items: center;
   height: 28px;
-  padding: 0 14px;
-  gap: 6px;
+  padding: 0 8px 0 10px;
+  gap: 5px;
   position: relative;
 }
 .dest-arrow { color: var(--text-muted); font-size: 10px; }
@@ -686,10 +686,7 @@ html, body, #root {
 /* ── Join column selection panel ────────────────────── */
 .join-col-panel {
   border-top: 1px solid var(--border);
-  max-height: 280px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  /* No overflow here — each group scrolls independently so both headers stay visible */
 }
 .join-col-group {
   border-bottom: 1px solid var(--border);
@@ -705,10 +702,9 @@ html, body, #root {
   text-transform: uppercase;
   background: rgba(255,255,255,0.025);
   border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 1;
 }
+/* Group body — full height, no scroll. Nodes can be any height on the canvas. */
+.join-col-group-body { }
 .join-col-all-btn {
   font-size: 9px;
   padding: 1px 6px;
@@ -776,6 +772,49 @@ html, body, #root {
 .join-col-alias:focus { border-color: var(--blue); }
 .join-col-alias:disabled { opacity: 0.35; cursor: not-allowed; }
 
+/* ── Destination column list header ─────────────────── */
+.dest-list-header {
+  display: flex;
+  align-items: center;
+  padding: 3px 8px 3px 10px;
+  border-bottom: 1px solid var(--border);
+  gap: 4px;
+}
+.dest-list-hdr-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+/* ── Destination drag grip ───────────────────────────── */
+.dest-grip {
+  color: var(--text-muted);
+  cursor: grab;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.dest-column-row:hover .dest-grip,
+.dest-custom-row:hover .dest-grip { opacity: 0.6; }
+.dest-grip:hover { opacity: 1 !important; color: var(--text-dim); }
+
+/* ── Destination drag states ─────────────────────────── */
+.dest-dragging { opacity: 0.3 !important; }
+.dest-drag-over { box-shadow: inset 0 2px 0 var(--blue); }
+
+/* ── Source column name in unified list ──────────────── */
+.dest-src-name {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── Destination custom columns ─────────────────────── */
 .dest-custom-section {
   border-top: 1px solid var(--border);
@@ -797,7 +836,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 14px 5px 14px;
+  padding: 4px 8px 4px 10px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   position: relative;
 }

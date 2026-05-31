@@ -5,6 +5,8 @@ import type { AppNode, WriteTableNodeData } from '../lib/types'
 import { buildNodeSQL } from '../lib/sqlBuilder'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle, connHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: WriteTableNodeData }>
@@ -55,23 +57,15 @@ function WriteTableNode({ id, data, selected }: Props) {
     : isConnected ? (tableName ? `→ ${tableName}` : 'Enter table name') : 'Connect a database'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview data">
+    <PipelineNode selected={selected} title="Click to preview data">
       {/* conn-in — violet square (left top) */}
       <Handle type="target" position={Position.Left} id="conn-in"
-        style={{
-          top: 36, left: -7, width: 13, height: 13, borderRadius: 3,
-          background: isConnected ? '#7c3aed' : '#3b2c5a',
-          border: `2px solid ${isConnected ? '#5b21b6' : '#1e1540'}`,
-        }}
+        style={connHandle(isConnected, { top: 36, left: -7 })}
       />
 
       {/* row-in — blue square (left bottom) */}
       <Handle type="target" position={Position.Left} id="row-in"
-        style={{
-          top: 64, left: -7, width: 13, height: 13, borderRadius: 3,
-          background: hasInput ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${hasInput ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(hasInput, { top: 64, left: -7 })}
       />
 
       <NodeHeader def={writeTableDef} subtitle={subtitle} />
@@ -144,7 +138,7 @@ function WriteTableNode({ id, data, selected }: Props) {
         {status === 'done' && <CheckCircle size={10} strokeWidth={2} style={{ marginLeft: 'auto', color: 'var(--green)' }} />}
         {status === 'error' && <AlertCircle size={10} strokeWidth={2} style={{ marginLeft: 'auto', color: 'var(--red)' }} />}
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

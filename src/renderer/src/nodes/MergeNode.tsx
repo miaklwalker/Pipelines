@@ -4,6 +4,8 @@ import { Layers } from 'lucide-react'
 import type { AppNode, MergeNodeData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: MergeNodeData }>
@@ -18,30 +20,19 @@ function MergeNode({ data, selected }: Props) {
     : 'Connect two datasets'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       {/* Left input — top (first dataset) */}
       <Handle type="target" position={Position.Left} id="row-left"
-        style={{
-          top: 36, left: -7, width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, { top: 36, left: -7 })}
       />
       {/* Left input — bottom (second dataset) */}
       <Handle type="target" position={Position.Left} id="row-right"
-        style={{
-          top: 64, left: -7, width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, { top: 64, left: -7 })}
       />
 
       {/* Row output — right center, above column list */}
       <Handle type="source" position={Position.Right} id="row-out"
-        style={{
-          top: 0, right: 0, left: 'auto', bottom: 'auto',
-          transform: 'translate(50%, -50%)',
-          width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, { ...TOP_RIGHT_ROW_OUT, left: 'auto', bottom: 'auto' })}
       />
 
       <NodeHeader def={mergeDef} subtitle={subtitle} />
@@ -57,10 +48,7 @@ function MergeNode({ data, selected }: Props) {
                 position={Position.Right}
                 id={`col-out-${col.name}`}
                 onMouseDown={stopProp}
-                style={{
-                  width: 11, height: 11, borderRadius: '50%',
-                  background: 'var(--green)', border: '2px solid var(--green-dark)',
-                }}
+                style={colHandle({ width: 11, height: 11 })}
               />
             </div>
           ))}
@@ -79,7 +67,7 @@ function MergeNode({ data, selected }: Props) {
           {hasLeft ? 'Ready — click to preview' : 'Awaiting both inputs'}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

@@ -5,6 +5,8 @@ import { v4 as uuid } from 'uuid'
 import type { AppNode, AggregateNodeData, AggItem, AggFunc } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 
 const AGG_FUNCS: AggFunc[] = ['COUNT', 'COUNT_DISTINCT', 'SUM', 'AVG', 'MIN', 'MAX']
 const AGG_LABELS: Record<AggFunc, string> = {
@@ -53,20 +55,12 @@ function AggregateNode({ id, data, selected }: Props) {
     : hasInput ? 'Add aggregations' : 'No input connected'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       <Handle type="target" position={Position.Left} id="row-in"
-        style={{
-          top: '50%', left: -7, width: 13, height: 13, borderRadius: 3,
-          background: hasInput ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${hasInput ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(hasInput, { top: '50%', left: -7 })}
       />
       <Handle type="source" position={Position.Right} id="row-out"
-        style={{
-          top: 0, right: 0, transform: 'translate(50%, -50%)',
-          width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, TOP_RIGHT_ROW_OUT)}
       />
 
       <NodeHeader def={aggregateDef} subtitle={subtitle} />
@@ -158,7 +152,7 @@ function AggregateNode({ id, data, selected }: Props) {
             : `${groupBy.length} group col${groupBy.length !== 1 ? 's' : ''}, ${aggregations.length} agg${aggregations.length !== 1 ? 's' : ''}`}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

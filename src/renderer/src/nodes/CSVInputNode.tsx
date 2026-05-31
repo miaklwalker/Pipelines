@@ -4,6 +4,8 @@ import { FileText } from 'lucide-react'
 import type { AppNode, CSVNodeData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 
 // ── Type badge ────────────────────────────────────────────────────────────────
 function typeBadgeClass(type: string): string {
@@ -29,7 +31,7 @@ function CSVInputNode({ data, selected }: Props) {
     : 'No file loaded')
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       {/*
         Row-stream output — square pinned to the TOP-RIGHT corner.
         position=Right so edges route rightward; top/right + transform straddle the corner.
@@ -38,12 +40,7 @@ function CSVInputNode({ data, selected }: Props) {
         type="source"
         position={Position.Right}
         id="row-out"
-        style={{
-          top: 0, right: 0, left: 'auto', bottom: 'auto',
-          transform: 'translate(50%, -50%)',
-          width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, { ...TOP_RIGHT_ROW_OUT, left: 'auto', bottom: 'auto' })}
       />
 
       <NodeHeader def={csvInputDef} subtitle={subtitle} />
@@ -58,10 +55,7 @@ function CSVInputNode({ data, selected }: Props) {
               position={Position.Right}
               id={`col-out-${col.name}`}
               onMouseDown={stopProp}
-              style={{
-                width: 11, height: 11, borderRadius: '50%',
-                background: 'var(--green)', border: '2px solid var(--green-dark)',
-              }}
+              style={colHandle({ width: 11, height: 11 })}
             />
           </div>
         ))}
@@ -72,7 +66,7 @@ function CSVInputNode({ data, selected }: Props) {
           No columns detected
         </div>
       )}
-    </div>
+    </PipelineNode>
   )
 }
 

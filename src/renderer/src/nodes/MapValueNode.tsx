@@ -4,6 +4,8 @@ import { ArrowLeftRight, Plus, X } from 'lucide-react'
 import type { AppNode, MapValueData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { colHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: MapValueData }>
@@ -32,7 +34,7 @@ function MapValueNode({ id, data, selected }: Props) {
     : 'Configure mapping'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       {/* Anchor input — amber square */}
       <Handle type="target" position={Position.Left} id="anchor-in"
         style={{
@@ -44,10 +46,7 @@ function MapValueNode({ id, data, selected }: Props) {
 
       {/* Column output — green circle */}
       <Handle type="source" position={Position.Right} id="col-out"
-        style={{
-          top: '50%', right: -5.5, width: 11, height: 11, borderRadius: '50%',
-          background: 'var(--green)', border: '2px solid var(--green-dark)',
-        }}
+        style={colHandle({ top: '50%', right: -5.5, width: 11, height: 11 })}
       />
 
       <NodeHeader def={mapValueDef} subtitle={subtitle} />
@@ -130,7 +129,7 @@ function MapValueNode({ id, data, selected }: Props) {
             : `${mappings.length} mapping${mappings.length !== 1 ? 's' : ''} defined`}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

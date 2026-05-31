@@ -4,6 +4,8 @@ import { GitMerge, Check, X } from 'lucide-react'
 import type { AppNode, JoinNodeData, JoinColSelection } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: JoinNodeData }>
@@ -67,29 +69,18 @@ function JoinNode({ id, data, selected }: Props) {
   const rightAllOn = rightSel.length > 0 && rightSel.every((s) => s.included)
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       {/* Left input — top (left table) */}
       <Handle type="target" position={Position.Left} id="row-left"
-        style={{
-          top: 42, left: -7, width: 13, height: 13, borderRadius: 3,
-          background: leftReady ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${leftReady ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(leftReady, { top: 42, left: -7 })}
       />
       {/* Left input — bottom (right table) */}
       <Handle type="target" position={Position.Left} id="row-right"
-        style={{
-          top: 78, left: -7, width: 13, height: 13, borderRadius: 3,
-          background: rightReady ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${rightReady ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(rightReady, { top: 78, left: -7 })}
       />
       {/* Row output */}
       <Handle type="source" position={Position.Right} id="row-out"
-        style={{
-          top: '50%', right: -7, width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, { top: '50%', right: -7 })}
       />
 
       <NodeHeader
@@ -179,7 +170,7 @@ function JoinNode({ id, data, selected }: Props) {
               : `${joinType} on ${leftKey} = ${rightKey}`}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 
@@ -210,38 +201,42 @@ function JoinColGroup({ label, labelColor, cols, allOn, onToggleAll, onToggle, o
         </button>
       </div>
 
-      {/* Column rows */}
-      {cols.map((s) => (
-        <div key={s.name} className={`join-col-row${s.included ? '' : ' excluded'}`}>
-          {/* Toggle */}
-          <button
-            className={`join-col-toggle ${s.included ? 'on' : 'off'}`}
-            onClick={(e) => { stopProp(e); onToggle(s.name) }}
-            title={s.included ? 'Exclude' : 'Include'}
-          >
-            {s.included
-              ? <Check size={9} strokeWidth={2.5} />
-              : <X     size={9} strokeWidth={2.5} />}
-          </button>
+      {/* Column rows — own scroll area so this group never hides the other one */}
+      <div className="join-col-group-body">
+        {cols.map((s) => (
+          <div key={s.name} className={`join-col-row${s.included ? '' : ' excluded'}`}>
+            {/* Toggle */}
+            <button
+              className={`join-col-toggle ${s.included ? 'on' : 'off'}`}
+              onClick={(e) => { stopProp(e); onToggle(s.name) }}
+              onMouseDown={(e) => e.stopPropagation()}
+              title={s.included ? 'Exclude' : 'Include'}
+            >
+              {s.included
+                ? <Check size={9} strokeWidth={2.5} />
+                : <X     size={9} strokeWidth={2.5} />}
+            </button>
 
-          {/* Source name */}
-          <span className="join-col-src" title={s.name}>{s.name}</span>
+            {/* Source name */}
+            <span className="join-col-src" title={s.name}>{s.name}</span>
 
-          {/* Arrow */}
-          <span className="join-col-arrow">→</span>
+            {/* Arrow */}
+            <span className="join-col-arrow">→</span>
 
-          {/* Alias input */}
-          <input
-            className="join-col-alias"
-            value={s.alias}
-            placeholder={s.name}
-            disabled={!s.included}
-            onChange={(e) => onAlias(s.name, e.target.value)}
-            onClick={stopProp}
-            title="Output column name"
-          />
-        </div>
-      ))}
+            {/* Alias input */}
+            <input
+              className="join-col-alias"
+              value={s.alias}
+              placeholder={s.name}
+              disabled={!s.included}
+              onChange={(e) => onAlias(s.name, e.target.value)}
+              onClick={stopProp}
+              onMouseDown={(e) => e.stopPropagation()}
+              title="Output column name"
+            />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

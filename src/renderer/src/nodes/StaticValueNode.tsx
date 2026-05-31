@@ -4,6 +4,8 @@ import { Tag } from 'lucide-react'
 import type { AppNode, StaticValueData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { colHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: StaticValueData }>
@@ -23,7 +25,7 @@ function StaticValueNode({ id, data, selected }: Props) {
   const subtitle = isReady ? `"${columnName}" = '${value}'` : 'Configure value'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       {/* Anchor input — amber square (special port) */}
       <Handle type="target" position={Position.Left} id="anchor-in"
         style={{
@@ -35,10 +37,7 @@ function StaticValueNode({ id, data, selected }: Props) {
 
       {/* Column output — green circle */}
       <Handle type="source" position={Position.Right} id="col-out"
-        style={{
-          top: '50%', right: -5.5, width: 11, height: 11, borderRadius: '50%',
-          background: 'var(--green)', border: '2px solid var(--green-dark)',
-        }}
+        style={colHandle({ top: '50%', right: -5.5, width: 11, height: 11 })}
       />
 
       <NodeHeader def={staticValueDef} subtitle={subtitle} />
@@ -86,7 +85,7 @@ function StaticValueNode({ id, data, selected }: Props) {
             : `Emits '${value}' → ${hasAnchor ? 'anchored' : 'no anchor'}`}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

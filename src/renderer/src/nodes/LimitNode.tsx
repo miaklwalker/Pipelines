@@ -4,6 +4,8 @@ import { Hash } from 'lucide-react'
 import type { AppNode, LimitNodeData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: LimitNodeData }>
@@ -22,19 +24,12 @@ function LimitNode({ id, data, selected }: Props) {
   const subtitle = offset > 0 ? `${count} rows (skip ${offset})` : `${count} rows`
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       <Handle type="target" position={Position.Left} id="row-in"
-        style={{
-          top: '50%', left: -7, width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, { top: '50%', left: -7 })}
       />
       <Handle type="source" position={Position.Right} id="row-out"
-        style={{
-          top: 0, right: 0, transform: 'translate(50%, -50%)',
-          width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, TOP_RIGHT_ROW_OUT)}
       />
 
       <NodeHeader def={limitDef} subtitle={subtitle} />
@@ -70,7 +65,7 @@ function LimitNode({ id, data, selected }: Props) {
           {offset > 0 ? `Rows ${offset + 1}–${offset + count}` : `First ${count} rows`}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

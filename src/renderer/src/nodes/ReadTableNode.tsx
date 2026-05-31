@@ -5,6 +5,8 @@ import type { AppNode, ReadTableNodeData } from '../lib/types'
 import { propagateColumns } from '../lib/graphUtils'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle, colHandle, connHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ReadTableNodeData }>
@@ -59,24 +61,15 @@ function ReadTableNode({ id, data, selected }: Props) {
     : 'Connect a database'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       {/* conn-in — violet square (left top) */}
       <Handle type="target" position={Position.Left} id="conn-in"
-        style={{
-          top: 36, left: -7, width: 13, height: 13, borderRadius: 3,
-          background: isConnected ? '#7c3aed' : '#3b2c5a',
-          border: `2px solid ${isConnected ? '#5b21b6' : '#1e1540'}`,
-        }}
+        style={connHandle(isConnected, { top: 36, left: -7 })}
       />
 
       {/* row-out — top-right corner, blue square */}
       <Handle type="source" position={Position.Right} id="row-out"
-        style={{
-          top: 0, right: 0, transform: 'translate(50%, -50%)',
-          width: 13, height: 13, borderRadius: 3,
-          background: isReady ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${isReady ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(isReady, TOP_RIGHT_ROW_OUT)}
       />
 
       <NodeHeader def={readTableDef} subtitle={subtitle} />
@@ -140,7 +133,7 @@ function ReadTableNode({ id, data, selected }: Props) {
               <Handle
                 type="source" position={Position.Right}
                 id={`col-out-${col.name}`}
-                style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--green)', border: '2px solid var(--green-dark)' }}
+                style={colHandle()}
               />
               <span className="col-name" title={col.name}>{col.name}</span>
               <span className="col-type">{col.type}</span>
@@ -169,7 +162,7 @@ function ReadTableNode({ id, data, selected }: Props) {
           </span>
         )}
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

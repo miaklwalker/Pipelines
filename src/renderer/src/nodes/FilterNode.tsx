@@ -4,6 +4,8 @@ import { Filter } from 'lucide-react'
 import type { AppNode, FilterNodeData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle, colHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: FilterNodeData }>
@@ -28,16 +30,12 @@ function FilterNode({ id, data, selected }: Props) {
     : hasInput ? 'Enter a condition' : 'No input connected'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview (pass branch)">
+    <PipelineNode selected={selected} title="Click to preview (pass branch)">
 
       {/* ── Left handles ──────────────────────────────────────────────────── */}
       {/* Row input */}
       <Handle type="target" position={Position.Left} id="row-in"
-        style={{
-          top: 36, left: -7, width: 13, height: 13, borderRadius: 3,
-          background: hasInput ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${hasInput ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(hasInput, { top: 36, left: -7 })}
       />
       {/* Test-value input — connects a scalar row stream used in the condition */}
       <Handle type="target" position={Position.Left} id="val-in"
@@ -125,11 +123,7 @@ function FilterNode({ id, data, selected }: Props) {
                 position={Position.Right}
                 id={`col-out-pass-${col.name}`}
                 onMouseDown={stopProp}
-                style={{
-                  top: '30%',
-                  width: 9, height: 9, borderRadius: '50%',
-                  background: 'var(--green)', border: '2px solid var(--green-dark)',
-                }}
+                style={colHandle({ top: '30%' })}
               />
 
               {/* Fail handle — lower half of the row */}
@@ -165,7 +159,7 @@ function FilterNode({ id, data, selected }: Props) {
               : 'Ready — green = pass, red = fail'}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

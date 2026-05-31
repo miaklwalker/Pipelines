@@ -53,14 +53,18 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
       const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
       const d = node.data as DestinationNodeData
       const existingMap = d.colMap ?? []
-      // Upstream pass-through columns (preserve rename/exclude state)
-      const passThrough = inputCols.map((col) => {
-        const existing = existingMap.find((m) => m.sourceCol === col.name)
-        return existing ?? { sourceCol: col.name, destCol: col.name, included: true }
-      })
       // Custom columns the user created (sourceCol === '') — always preserved
       const customCols = existingMap.filter((m) => !m.sourceCol)
-      return { ...node, data: { ...d, inputColumns: inputCols, colMap: [...passThrough, ...customCols] } }
+      // Upstream pass-through columns: respect user's drag order from existingMap,
+      // then append any new upstream columns not yet in existingMap
+      const inputColNames = new Set(inputCols.map((c) => c.name))
+      const orderedPassThrough = existingMap
+        .filter((m) => m.sourceCol && inputColNames.has(m.sourceCol))
+      const existingSourceCols = new Set(orderedPassThrough.map((m) => m.sourceCol))
+      const newCols = inputCols
+        .filter((col) => !existingSourceCols.has(col.name))
+        .map((col) => ({ sourceCol: col.name, destCol: col.name, included: true }))
+      return { ...node, data: { ...d, inputColumns: inputCols, colMap: [...orderedPassThrough, ...newCols, ...customCols] } }
     }
 
     // ── Merge ─────────────────────────────────────────────────────────────────

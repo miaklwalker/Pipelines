@@ -5,6 +5,8 @@ import { v4 as uuid } from 'uuid'
 import type { AppNode, TransformNodeData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: TransformNodeData }>
@@ -39,19 +41,12 @@ function TransformNode({ id, data, selected }: Props) {
   const subtitle  = `${expressions.length} expression${expressions.length !== 1 ? 's' : ''}`
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       <Handle type="target" position={Position.Left} id="row-in"
-        style={{
-          top: '50%', left: -7, width: 13, height: 13, borderRadius: 3,
-          background: hasInput ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${hasInput ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(hasInput, { top: '50%', left: -7 })}
       />
       <Handle type="source" position={Position.Right} id="row-out"
-        style={{
-          top: '50%', right: -7, width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, { top: '50%', right: -7 })}
       />
 
       <NodeHeader def={transformDef} subtitle={subtitle} />
@@ -111,7 +106,7 @@ function TransformNode({ id, data, selected }: Props) {
           {!hasInput ? 'Connect input' : `${inputColumns.length} cols in`}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

@@ -5,6 +5,8 @@ import type { AppNode, AppEdge, CSVOutputNodeData } from '../lib/types'
 import { buildNodeSQL } from '../lib/sqlBuilder'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: CSVOutputNodeData }>
@@ -95,13 +97,9 @@ function CSVOutputNode({ id, data, selected }: Props) {
     'Export to CSV'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       <Handle type="target" position={Position.Left} id="row-in"
-        style={{
-          top: '50%', left: -7, width: 13, height: 13, borderRadius: 3,
-          background: hasInput ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${hasInput ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(hasInput, { top: '50%', left: -7 })}
       />
 
       <NodeHeader
@@ -181,7 +179,7 @@ function CSVOutputNode({ id, data, selected }: Props) {
           {!hasInput ? 'Connect a data source' : `${inputColumns.length} columns in`}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

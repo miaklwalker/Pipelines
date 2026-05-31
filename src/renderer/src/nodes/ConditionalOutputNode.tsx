@@ -4,6 +4,8 @@ import { GitBranch, Plus, X } from 'lucide-react'
 import type { AppNode, ConditionalOutputData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { colHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ConditionalOutputData }>
@@ -32,7 +34,7 @@ function ConditionalOutputNode({ id, data, selected }: Props) {
     : 'Configure conditions'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       {/* Anchor input — amber square */}
       <Handle type="target" position={Position.Left} id="anchor-in"
         style={{
@@ -44,10 +46,7 @@ function ConditionalOutputNode({ id, data, selected }: Props) {
 
       {/* Column output — green circle */}
       <Handle type="source" position={Position.Right} id="col-out"
-        style={{
-          top: '50%', right: -5.5, width: 11, height: 11, borderRadius: '50%',
-          background: 'var(--green)', border: '2px solid var(--green-dark)',
-        }}
+        style={colHandle({ top: '50%', right: -5.5, width: 11, height: 11 })}
       />
 
       <NodeHeader def={conditionalOutputDef} subtitle={subtitle} />
@@ -137,7 +136,7 @@ function ConditionalOutputNode({ id, data, selected }: Props) {
             : `${conditions.length} branch${conditions.length !== 1 ? 'es' : ''}${fallback ? ` + else` : ''}`}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 

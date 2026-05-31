@@ -4,6 +4,8 @@ import { Fingerprint } from 'lucide-react'
 import type { AppNode, UniqueNodeData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
+import { PipelineNode } from './shared/PipelineNode'
+import { rowHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: UniqueNodeData }>
@@ -26,23 +28,15 @@ function UniqueNode({ id, data, selected }: Props) {
     : hasInput ? 'Select a key column' : 'No input connected'
 
   return (
-    <div className={`pipeline-node${selected ? ' selected' : ''}`} title="Click to preview">
+    <PipelineNode selected={selected}>
       {/* Row input */}
       <Handle type="target" position={Position.Left} id="row-in"
-        style={{
-          top: 36, left: -7, width: 13, height: 13, borderRadius: 3,
-          background: hasInput ? 'var(--row-handle)' : '#334155',
-          border: `2px solid ${hasInput ? 'var(--blue-dark)' : '#1e293b'}`,
-        }}
+        style={rowHandle(hasInput, { top: 36, left: -7 })}
       />
 
       {/* Row output — top-right corner */}
       <Handle type="source" position={Position.Right} id="row-out"
-        style={{
-          top: 0, right: 0, transform: 'translate(50%, -50%)',
-          width: 13, height: 13, borderRadius: 3,
-          background: 'var(--row-handle)', border: '2px solid var(--blue-dark)',
-        }}
+        style={rowHandle(true, TOP_RIGHT_ROW_OUT)}
       />
 
       <NodeHeader def={uniqueDef} subtitle={subtitle} />
@@ -92,7 +86,7 @@ function UniqueNode({ id, data, selected }: Props) {
             : `Deduplicate on "${keyColumn}"`}
         </span>
       </div>
-    </div>
+    </PipelineNode>
   )
 }
 
