@@ -183,10 +183,12 @@ export function buildNodeSQL(
           // Emitter: use its scalar expression
           const expr = emitterExpression(colInEdge.source, nodes)
           if (expr !== null) return [`(${expr}) AS "${m.destCol}"`]
-          // Data node col-out: reference the column by name from the anchor
+          // Data node col-out: reference the column by name from the anchor.
+          // Only valid when anchorSQL was resolved — otherwise there's no FROM to read from.
           const srcHandle = colInEdge.sourceHandle ?? ''
-          if (srcHandle.startsWith('col-out-')) {
-            const srcCol = srcHandle.slice('col-out-'.length)
+          if (srcHandle.startsWith('col-out-') && anchorSQL) {
+            // Strip known prefixes: col-out-pass-, col-out-fail-, col-out-
+            const srcCol = srcHandle.replace(/^col-out-(?:pass-|fail-)?/, '')
             return [`"${srcCol}" AS "${m.destCol}"`]
           }
         }
