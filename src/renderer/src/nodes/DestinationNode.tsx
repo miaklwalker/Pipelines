@@ -6,7 +6,7 @@ import { propagateColumns } from '../lib/graphUtils'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { colHandle, connHandle } from './shared/handles'
+import { rowHandle, colHandle, connHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: DestinationNodeData }>
@@ -149,6 +149,10 @@ function DestinationNode({ id, data, selected }: Props) {
       {/* Connection input (violet square) */}
       <Handle type="target" position={Position.Left} id="conn-in"
         style={connHandle(!!resolvedConfig, { top: 36, left: -7 })}
+      />
+      {/* Row output — passes destination result downstream */}
+      <Handle type="source" position={Position.Right} id="row-out"
+        style={rowHandle(hasAny, { top: '50%', right: -7 })}
       />
 
       <NodeHeader
@@ -380,7 +384,7 @@ export const destinationDef: NodeDef<DestinationNodeData> = {
     ],
   },
   inputPorts: [{ type: 'col' }, { type: 'conn' }],
-  outputPorts: [{ type: 'col' }],
+  outputPorts: [{ type: 'row' }, { type: 'col' }],
   defaultData: () => ({
     label: 'Output',
     colMap: [],
