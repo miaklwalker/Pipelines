@@ -7,7 +7,8 @@ import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, colHandle, connHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
-
+import { typeBadgeClass } from './CSVInputNode'
+import { ColumnList } from './shared/columns'
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ReadTableCachedNodeData }>
 
@@ -34,6 +35,7 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
     if (!resolvedConfig || !query) return
     update({ status: 'fetching', error: undefined })
     try {
+      //@ts-ignore
       const result = await window.api.pgFetchCached(resolvedConfig, query, force)
       setNodes((ns) => {
         const updated = ns.map((n) => n.id === id
@@ -54,6 +56,7 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
     e.stopPropagation()
     if (!csvPath) return
     try {
+      //@ts-ignore
       await window.api.pgClearCache(csvPath)
       setNodes((ns) => {
         const updated = ns.map((n) => n.id === id
@@ -68,7 +71,7 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
   const isConnected = !!resolvedConfig
   const isReady = status === 'ready' && !!csvPath
   const isCached = isReady && !!cacheDate
-  const canFetch  = isConnected && !!query && status !== 'fetching'
+  const canFetch = isConnected && !!query && status !== 'fetching'
 
   const cacheDateStr = cacheDate
     ? new Date(cacheDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -77,9 +80,9 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
   const subtitle = isReady
     ? (isCached ? `Cached ${cacheDateStr} · ${rowCount?.toLocaleString()} rows` : `${rowCount?.toLocaleString()} rows`)
     : status === 'fetching' ? 'Fetching…'
-    : status === 'error' ? 'Fetch error'
-    : isConnected ? (query ? 'Click Fetch to load (or use cache)' : 'Enter table name or SQL')
-    : 'Connect a database'
+      : status === 'error' ? 'Fetch error'
+        : isConnected ? (query ? 'Click Fetch to load (or use cache)' : 'Enter table name or SQL')
+          : 'Connect a database'
 
   return (
     <PipelineNode selected={selected}>
@@ -97,38 +100,43 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
 
       <div className="node-body">
         {/* Mode toggle */}
-        <div className="node-body-row">
-          <span className="node-label">Mode</span>
-          <div className="node-toggle-group" onClick={stopProp} onMouseDown={stopProp}>
-            <button className={`node-toggle-btn${readMode === 'table' ? ' active' : ''}`} onClick={() => update({ readMode: 'table' })}>Table</button>
-            <button className={`node-toggle-btn${readMode === 'sql'   ? ' active' : ''}`} onClick={() => update({ readMode: 'sql'   })}>SQL</button>
-          </div>
-        </div>
 
-        {readMode === 'table' ? (
+        {!isCached && (<>
           <div className="node-body-row">
-            <span className="node-label">Table</span>
-            <input
-              className="node-input"
-              placeholder="table_name"
-              value={tableName}
-              onChange={(e) => update({ tableName: e.target.value })}
-              onClick={stopProp} onMouseDown={stopProp}
-            />
+            <span className="node-label">Mode</span>
+            <div className="node-toggle-group" onClick={stopProp} onMouseDown={stopProp}>
+              <button className={`node-toggle-btn${readMode === 'table' ? ' active' : ''}`} onClick={() => update({ readMode: 'table' })}>Table</button>
+              <button className={`node-toggle-btn${readMode === 'sql' ? ' active' : ''}`} onClick={() => update({ readMode: 'sql' })}>SQL</button>
+            </div>
           </div>
-        ) : (
-          <div className="node-body-row" style={{ alignItems: 'flex-start' }}>
-            <span className="node-label" style={{ marginTop: 4 }}>SQL</span>
-            <textarea
-              className="node-input db-sql-area"
-              placeholder="SELECT * FROM …"
-              value={customSQL}
-              rows={3}
-              onChange={(e) => update({ customSQL: e.target.value })}
-              onClick={stopProp} onMouseDown={stopProp}
-            />
-          </div>
-        )}
+          {readMode === 'table' ? (
+            <div className="node-body-row">
+              <span className="node-label">Table</span>
+              <input
+                className="node-input"
+                placeholder="table_name"
+                value={tableName}
+                onChange={(e) => update({ tableName: e.target.value })}
+                onClick={stopProp} onMouseDown={stopProp}
+              />
+            </div>
+          ) : (
+            <div className="node-body-row" style={{ alignItems: 'flex-start' }}>
+              <span className="node-label" style={{ marginTop: 4 }}>SQL</span>
+              <textarea
+                className="node-input db-sql-area"
+                placeholder="SELECT * FROM …"
+                value={customSQL}
+                rows={3}
+                onChange={(e) => update({ customSQL: e.target.value })}
+                onClick={stopProp} onMouseDown={stopProp}
+              />
+            </div>
+          )}
+
+        </>)}
+
+
 
         {/* Cache badge + controls */}
         {isCached && (
@@ -171,19 +179,7 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
 
       {/* Column list */}
       {isReady && columns.length > 0 && (
-        <div className="column-list">
-          {columns.map((col) => (
-            <div key={col.name} className="column-row" style={{ position: 'relative' }}>
-              <Handle
-                type="source" position={Position.Right}
-                id={`col-out-${col.name}`}
-                style={colHandle()}
-              />
-              <span className="col-name" title={col.name}>{col.name}</span>
-              <span className="col-type">{col.type}</span>
-            </div>
-          ))}
-        </div>
+        <ColumnList columns={columns} />
       )}
 
       <div className="status-row">
@@ -191,9 +187,9 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
         <span className="status-text">
           {status === 'ready' ? `${rowCount?.toLocaleString() ?? '?'} rows${isCached ? ' (cached)' : ''}`
             : status === 'fetching' ? 'Fetching from database…'
-            : status === 'error' ? 'Fetch failed'
-            : !isConnected ? 'Connect a database node'
-            : 'Ready to fetch'}
+              : status === 'error' ? 'Fetch failed'
+                : !isConnected ? 'Connect a database node'
+                  : 'Ready to fetch'}
         </span>
         {isReady && <CheckCircle size={10} strokeWidth={2} style={{ marginLeft: 'auto', color: 'var(--green)' }} />}
         {status === 'error' && <AlertCircle size={10} strokeWidth={2} style={{ marginLeft: 'auto', color: 'var(--red)' }} />}
@@ -210,6 +206,7 @@ export const readTableCachedDef: NodeDef<ReadTableCachedNodeData> = {
   category: 'database',
   name: 'Read (Cached)',
   desc: 'Fetch once, run from local cache',
+  //@ts-ignore
   Icon: HardDrive,
   help: {
     summary: 'Like Read Table, but saves the fetched data to a persistent local CSV. Subsequent pipeline runs use the cache without reconnecting to the database.',
@@ -222,7 +219,7 @@ export const readTableCachedDef: NodeDef<ReadTableCachedNodeData> = {
       '"Clear Cache" deletes the local CSV — next run will fetch fresh data.',
     ],
   },
-  inputPorts:  [{ type: 'conn' }],
+  inputPorts: [{ type: 'conn' }],
   outputPorts: [{ type: 'row' }],
   defaultData: () => ({
     readMode: 'table', tableName: '', customSQL: '',

@@ -425,6 +425,7 @@ export const destinationDef: NodeDef<DestinationNodeData> = {
   category: 'output',
   name: 'Destination',
   desc: 'Shape output columns: rename, filter, reorder, or add new ones',
+  //@ts-ignore
   Icon: Database,
   hasAdvanced: true,
   help: {

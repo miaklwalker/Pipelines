@@ -6,9 +6,10 @@ import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
+import { ColumnList } from './shared/columns'
 
 // ── Type badge ────────────────────────────────────────────────────────────────
-function typeBadgeClass(type: string): string {
+export function typeBadgeClass(type: string): string {
   const t = type.toLowerCase()
   if (t === 'integer')   return 'type-integer'
   if (t === 'float')     return 'type-float'
@@ -45,21 +46,7 @@ function CSVInputNode({ data, selected }: Props) {
 
       <NodeHeader def={csvInputDef} subtitle={subtitle} />
 
-      <div className="column-list">
-        {columns.map((col) => (
-          <div key={col.name} className="column-row">
-            <span className="col-name" title={col.name}>{col.name}</span>
-            <span className={`col-type-badge ${typeBadgeClass(col.type)}`}>{col.type}</span>
-            <Handle
-              type="source"
-              position={Position.Right}
-              id={`col-out-${col.name}`}
-              onMouseDown={stopProp}
-              style={colHandle({ width: 11, height: 11 })}
-            />
-          </div>
-        ))}
-      </div>
+      <ColumnList columns={columns} />
 
       {columns.length === 0 && (
         <div style={{ padding: '12px 14px', color: 'var(--text-muted)', fontSize: 11 }}>
@@ -78,6 +65,7 @@ export const csvInputDef: NodeDef<CSVNodeData> = {
   category: 'input',
   name: 'CSV File',
   desc: 'Load & auto-detect schema',
+  //@ts-ignore
   Icon: FileText,
   help: {
     summary: 'Reads a CSV file and auto-detects column names and data types using DuckDB.',

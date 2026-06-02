@@ -6,6 +6,7 @@ import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, colHandle } from './shared/handles'
+import { ColumnList } from './shared/columns'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: JoinNodeData }>
@@ -173,19 +174,7 @@ function JoinNode({ id, data, selected }: Props) {
             ]
         if (!outCols.length) return null
         return (
-          <div className="column-list">
-            {outCols.map(col => (
-              <div key={col.name} className="column-row" style={{ position: 'relative' }}>
-                <Handle
-                  type="source" position={Position.Right}
-                  id={`col-out-${col.name}`}
-                  style={colHandle()}
-                />
-                <span className="col-name" title={col.name}>{col.name}</span>
-                <span className="col-type">{col.type}</span>
-              </div>
-            ))}
-          </div>
+          <ColumnList columns={outCols} />
         )
       })()}
 

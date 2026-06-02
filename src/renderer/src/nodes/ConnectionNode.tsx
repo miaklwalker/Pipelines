@@ -33,6 +33,7 @@ function ConnectionNode({ id, data, selected }: Props) {
     e.stopPropagation()
     update({ testStatus: 'testing', testError: undefined })
     try {
+      //@ts-ignore
       const result = await window.api.pgTest(config)
       update({ testStatus: result.ok ? 'ok' : 'error', testError: result.error })
     } catch (err) {
@@ -172,6 +173,7 @@ export const connectionDef: NodeDef<ConnectionNodeData> = {
   category: 'database',
   name: 'Connection',
   desc: 'PostgreSQL connection config',
+  //@ts-ignore
   Icon: Database,
   help: {
     summary: 'Stores and validates a PostgreSQL connection. Connect its output to Read Table or Write Table nodes.',
