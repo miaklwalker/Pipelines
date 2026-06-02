@@ -44,7 +44,7 @@ function CSVInputNode({ data, selected }: Props) {
         style={rowHandle(true, { ...TOP_RIGHT_ROW_OUT, left: 'auto', bottom: 'auto' })}
       />
 
-      <NodeHeader def={csvInputDef} subtitle={subtitle} />
+      <NodeHeader def={csvInputDef} id={id} subtitle={subtitle} />
 
       <ColumnList columns={columns} />
 

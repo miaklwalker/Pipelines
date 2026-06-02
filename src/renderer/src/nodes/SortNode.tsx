@@ -49,7 +49,7 @@ function SortNode({ id, data, selected }: Props) {
         style={rowHandle(true, TOP_RIGHT_ROW_OUT)}
       />
 
-      <NodeHeader def={sortDef} subtitle={subtitle} />
+      <NodeHeader def={sortDef} id={id} subtitle={subtitle} />
 
       <div className="map-table">
         <div className="map-table-header">

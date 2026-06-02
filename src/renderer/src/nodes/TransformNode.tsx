@@ -49,7 +49,7 @@ function TransformNode({ id, data, selected }: Props) {
         style={rowHandle(true, { top: '50%', right: -7 })}
       />
 
-      <NodeHeader def={transformDef} subtitle={subtitle} />
+      <NodeHeader def={transformDef} id={id} subtitle={subtitle} />
 
       <div className="node-body">
         <div className="node-body-row">

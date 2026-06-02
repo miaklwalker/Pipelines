@@ -59,7 +59,7 @@ function FilterNode({ id, data, selected }: Props) {
         }}
       />
 
-      <NodeHeader def={filterDef} subtitle={subtitle} />
+      <NodeHeader def={filterDef} id={id} subtitle={subtitle} />
 
       {/* ── Legend for the two sides ──────────────────────────────────────── */}
       <div className="filter-io-legend">

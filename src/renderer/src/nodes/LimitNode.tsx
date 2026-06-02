@@ -32,7 +32,7 @@ function LimitNode({ id, data, selected }: Props) {
         style={rowHandle(true, TOP_RIGHT_ROW_OUT)}
       />
 
-      <NodeHeader def={limitDef} subtitle={subtitle} />
+      <NodeHeader def={limitDef} id={id} subtitle={subtitle} />
 
       <div className="node-body">
         <div className="node-body-row">

@@ -164,6 +164,50 @@ html, body, #root {
 }
 .help-tips li { margin-bottom: 2px; }
 
+/* Node label & description edit panel */
+.node-meta-description {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  padding: 5px 13px 6px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.45;
+  font-style: italic;
+}
+.node-meta-panel {
+  background: rgba(13,17,23,0.85);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 13px 10px;
+}
+.node-meta-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+.node-meta-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.node-meta-row:last-child { margin-bottom: 0; }
+.node-meta-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  min-width: 36px;
+  padding-top: 4px;
+}
+.node-meta-textarea {
+  resize: vertical;
+  min-height: 48px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 /* Advanced panel */
 .advanced-panel {
   background: rgba(255,255,255,0.025);

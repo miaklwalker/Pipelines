@@ -63,7 +63,7 @@ function AggregateNode({ id, data, selected }: Props) {
         style={rowHandle(true, TOP_RIGHT_ROW_OUT)}
       />
 
-      <NodeHeader def={aggregateDef} subtitle={subtitle} />
+      <NodeHeader def={aggregateDef} id={id} subtitle={subtitle} />
 
       {/* ── Group By ──────────────────────────────────────────────────────── */}
       {hasInput && (

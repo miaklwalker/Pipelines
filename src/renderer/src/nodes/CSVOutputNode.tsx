@@ -104,6 +104,7 @@ function CSVOutputNode({ id, data, selected }: Props) {
 
       <NodeHeader
         def={csvOutputDef}
+        id={id}
         subtitle={subtitle}
         advancedOpen={advOpen}
         onAdvancedToggle={() => setAdvOpen((v) => !v)}

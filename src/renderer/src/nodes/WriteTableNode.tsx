@@ -68,7 +68,7 @@ function WriteTableNode({ id, data, selected }: Props) {
         style={rowHandle(hasInput, { top: 64, left: -7 })}
       />
 
-      <NodeHeader def={writeTableDef} subtitle={subtitle} />
+      <NodeHeader def={writeTableDef} id={id} subtitle={subtitle} />
 
       {/* Port legend */}
       <div className="filter-io-legend">

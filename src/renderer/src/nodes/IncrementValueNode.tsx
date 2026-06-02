@@ -40,7 +40,7 @@ function IncrementValueNode({ id, data, selected }: Props) {
         style={colHandle({ top: '50%', right: -5.5, width: 11, height: 11 })}
       />
 
-      <NodeHeader def={incrementValueDef} subtitle={subtitle} />
+      <NodeHeader def={incrementValueDef} id={id} subtitle={subtitle} />
 
       <div className="node-body">
         <div className="node-body-row">

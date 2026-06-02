@@ -51,7 +51,7 @@ function ConnectionNode({ id, data, selected }: Props) {
         style={connHandle(true, { top: '50%', right: -7 })}
       />
 
-      <NodeHeader def={connectionDef} subtitle={subtitle} />
+      <NodeHeader def={connectionDef} id={id} subtitle={subtitle} />
 
       <div className="node-body" style={{ gap: 0 }}>
         {/* Host + Port */}

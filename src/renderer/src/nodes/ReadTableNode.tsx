@@ -72,7 +72,7 @@ function ReadTableNode({ id, data, selected }: Props) {
         style={rowHandle(isReady, TOP_RIGHT_ROW_OUT)}
       />
 
-      <NodeHeader def={readTableDef} subtitle={subtitle} />
+      <NodeHeader def={readTableDef} id={id} subtitle={subtitle} />
 
       <div className="node-body">
         {/* Mode toggle */}

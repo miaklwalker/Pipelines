@@ -86,6 +86,7 @@ function JoinNode({ id, data, selected }: Props) {
 
       <NodeHeader
         def={joinDef}
+        id={id}
         subtitle={subtitle}
         advancedOpen={advancedOpen}
         onAdvancedToggle={() => setAdvancedOpen((v) => !v)}

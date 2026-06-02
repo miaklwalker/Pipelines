@@ -35,7 +35,7 @@ function MergeNode({ data, selected }: Props) {
         style={rowHandle(true, { ...TOP_RIGHT_ROW_OUT, left: 'auto', bottom: 'auto' })}
       />
 
-      <NodeHeader def={mergeDef} subtitle={subtitle} />
+      <NodeHeader def={mergeDef} id={id} subtitle={subtitle} />
 
       {/* Column outputs — same as CSVInputNode */}
       {hasLeft && (

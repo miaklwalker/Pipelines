@@ -164,6 +164,7 @@ function DestinationNode({ id, data, selected }: Props) {
 
       <NodeHeader
         def={destinationDef}
+        id={id}
         subtitle={subtitle}
         advancedOpen={advancedOpen}
         onAdvancedToggle={() => setAdvancedOpen((v) => !v)}

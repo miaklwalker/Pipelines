@@ -105,7 +105,7 @@ function BrowseSchemaNode({ id, data, selected }: Props) {
         style={rowHandle(isReady, TOP_RIGHT_ROW_OUT)}
       />
 
-      <NodeHeader def={browseSchemaNodeDef} subtitle={subtitle} />
+      <NodeHeader def={browseSchemaNodeDef} id={id} subtitle={subtitle} />
 
       <div className="node-body">
         {/* Browse / Refresh button */}

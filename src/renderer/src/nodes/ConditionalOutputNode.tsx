@@ -49,7 +49,7 @@ function ConditionalOutputNode({ id, data, selected }: Props) {
         style={colHandle({ top: '50%', right: -5.5, width: 11, height: 11 })}
       />
 
-      <NodeHeader def={conditionalOutputDef} subtitle={subtitle} />
+      <NodeHeader def={conditionalOutputDef} id={id} subtitle={subtitle} />
 
       <div className="node-body">
         <div className="node-body-row">

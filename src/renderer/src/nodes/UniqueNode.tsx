@@ -39,7 +39,7 @@ function UniqueNode({ id, data, selected }: Props) {
         style={rowHandle(true, TOP_RIGHT_ROW_OUT)}
       />
 
-      <NodeHeader def={uniqueDef} subtitle={subtitle} />
+      <NodeHeader def={uniqueDef} id={id} subtitle={subtitle} />
 
       <div className="node-body">
         {/* Key column selector */}
