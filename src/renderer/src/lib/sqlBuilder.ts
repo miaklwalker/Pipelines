@@ -155,27 +155,42 @@ export function buildNodeSQL(
       const included = (d.colMap ?? []).filter(m => m.included !== false && !m.sourceCol)
       if (!included.length) return null
 
-      // Find an anchor row source through any wired emitter
+      // Find an anchor row source — either through an emitter's anchor-in, or directly from
+      // a data node wired to a col-in handle (e.g. read-table col-out-{name})
       let anchorSQL: string | null = null
       for (const m of included) {
         if (!m.destCol) continue
         const colInEdge = edges.find(e => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`)
         if (!colInEdge) continue
+        // Path 1: emitter anchored to a row source
         const anchorEdge = edges.find(e => e.target === colInEdge.source && e.targetHandle === 'anchor-in')
         if (anchorEdge) {
           anchorSQL = buildNodeSQL(anchorEdge.source, nodes, edges, anchorEdge.sourceHandle ?? undefined)
+          if (anchorSQL) break
+        }
+        // Path 2: data node connected directly via col-out — use that node's full row output
+        const srcHandle = colInEdge.sourceHandle ?? ''
+        if (srcHandle.startsWith('col-out-')) {
+          anchorSQL = buildNodeSQL(colInEdge.source, nodes, edges)
           if (anchorSQL) break
         }
       }
 
       const cols = included.flatMap((m) => {
         if (!m.destCol) return []
-        // Emitter wired to col-in-custom-{destCol} takes priority over typed expression
         const colInEdge = edges.find(e => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`)
         if (colInEdge) {
+          // Emitter: use its scalar expression
           const expr = emitterExpression(colInEdge.source, nodes)
           if (expr !== null) return [`(${expr}) AS "${m.destCol}"`]
+          // Data node col-out: reference the column by name from the anchor
+          const srcHandle = colInEdge.sourceHandle ?? ''
+          if (srcHandle.startsWith('col-out-')) {
+            const srcCol = srcHandle.slice('col-out-'.length)
+            return [`"${srcCol}" AS "${m.destCol}"`]
+          }
         }
+        // Fall back to typed SQL expression
         const expr = m.customExpr?.trim()
         if (!expr) return []
         return [`(${expr}) AS "${m.destCol}"`]
