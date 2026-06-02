@@ -10,7 +10,7 @@ import { rowHandle, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: MergeNodeData }>
 
-function MergeNode({ data, selected }: Props) {
+function MergeNode({ id, data, selected }: Props) {
   const { inputColumns = [] } = data
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 

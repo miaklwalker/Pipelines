@@ -23,7 +23,7 @@ export function typeBadgeClass(type: string): string {
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: CSVNodeData }>
 
-function CSVInputNode({ data, selected }: Props) {
+function CSVInputNode({ id, data, selected }: Props) {
   const { fileName, columns } = data
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
