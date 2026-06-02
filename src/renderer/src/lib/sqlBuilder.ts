@@ -153,7 +153,24 @@ export function buildNodeSQL(
     case 'destination': {
       const d = node.data as DestinationNodeData
       const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
-      if (!inputEdge) return null
+      if (!inputEdge) {
+        // No row stream — try to build from custom-only columns
+        const customIncluded = (d.colMap ?? []).filter(m => m.included !== false && !m.sourceCol)
+        if (!customIncluded.length) return null
+        const customCols = customIncluded.flatMap((m) => {
+          if (!m.destCol) return []
+          const colInEdge = edges.find(e => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`)
+          if (colInEdge) {
+            const expr = emitterExpression(colInEdge.source, nodes)
+            if (expr !== null) return [`(${expr}) AS "${m.destCol}"`]
+          }
+          const expr = m.customExpr?.trim()
+          if (!expr) return []
+          return [`(${expr}) AS "${m.destCol}"`]
+        })
+        if (!customCols.length) return null
+        return `SELECT ${customCols.join(', ')}`
+      }
       const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
       if (!inputSQL) return null
 

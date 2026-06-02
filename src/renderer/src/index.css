@@ -65,7 +65,7 @@ html, body, #root {
   border: 1.5px solid var(--border);
   border-radius: 10px;
   min-width: 260px;
-  max-width: 300px;
+  max-width: 320px;
   box-shadow: 0 4px 24px rgba(0,0,0,0.4);
   cursor: pointer;
   transition: border-color 0.15s, box-shadow 0.15s;
@@ -219,6 +219,7 @@ html, body, #root {
 .node-label { font-size: 11px; color: var(--text-muted); min-width: 56px; }
 .node-select {
   flex: 1;
+  min-width: 0;           /* allows flex item to shrink below browser default */
   background: #0d1117;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -231,6 +232,7 @@ html, body, #root {
 .node-select:focus { border-color: var(--blue); }
 .node-input {
   flex: 1;
+  min-width: 0;           /* allows flex item to shrink below browser default */
   background: #0d1117;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -771,6 +773,33 @@ html, body, #root {
 }
 .join-col-alias:focus { border-color: var(--blue); }
 .join-col-alias:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Destination DB schema panel ────────────────────── */
+/* Sits directly inside PipelineNode (not .node-body), so no bleed margins */
+.dest-db-panel {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: rgba(124,58,237,0.04);
+}
+/* Browse button: flex-shrink-able, not 100%-width */
+.dest-db-browse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  background: rgba(124,58,237,0.12);
+  border: 1px solid rgba(124,58,237,0.35);
+  border-radius: 5px;
+  color: #a78bfa;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.dest-db-browse-btn:hover:not(:disabled) { background: rgba(124,58,237,0.22); border-color: #7c3aed; }
+.dest-db-browse-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Destination column list header ─────────────────── */
 .dest-list-header {

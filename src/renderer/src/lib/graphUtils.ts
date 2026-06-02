@@ -64,7 +64,13 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
       const newCols = inputCols
         .filter((col) => !existingSourceCols.has(col.name))
         .map((col) => ({ sourceCol: col.name, destCol: col.name, included: true }))
-      return { ...node, data: { ...d, inputColumns: inputCols, colMap: [...orderedPassThrough, ...newCols, ...customCols] } }
+      const connEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'conn-in')
+      let resolvedConfig: import('./types').PgConfig | null = null
+      if (connEdge) {
+        const connNode = nodes.find((n) => n.id === connEdge.source && n.type === 'connection')
+        if (connNode) resolvedConfig = (connNode.data as ConnectionNodeData).config
+      }
+      return { ...node, data: { ...d, inputColumns: inputCols, colMap: [...orderedPassThrough, ...newCols, ...customCols], resolvedConfig } }
     }
 
     // ── Merge ─────────────────────────────────────────────────────────────────

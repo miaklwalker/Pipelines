@@ -1,20 +1,34 @@
 import { memo, useCallback, useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { Database, Check, X, Plus, GripVertical } from 'lucide-react'
-import type { AppNode, AppEdge, DestinationNodeData, ColMapping } from '../lib/types'
+import type { AppNode, AppEdge, DestinationNodeData, ColMapping, TableEntry, ColumnInfo, PgConfig } from '../lib/types'
 import { propagateColumns } from '../lib/graphUtils'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, colHandle } from './shared/handles'
+import { rowHandle, colHandle, connHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: DestinationNodeData }>
 
 function DestinationNode({ id, data, selected }: Props) {
   const { setNodes, getEdges } = useReactFlow()
-  const { inputColumns = [], colMap = [] } = data
+  const {
+    inputColumns = [],
+    colMap = [],
+    resolvedConfig = null,
+    dbTables = [],
+    dbSelectedSchema = null,
+    dbSelectedTable = null,
+    dbTargetColumns = [],
+    dbStatus = 'idle',
+    dbError,
+  } = data
   const hasInput = inputColumns.length > 0
+
+  // Panel state
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [dbFilter, setDbFilter] = useState('')
 
   // Drag state
   const [dragIndex,     setDragIndex]     = useState<number | null>(null)
@@ -83,6 +97,51 @@ function DestinationNode({ id, data, selected }: Props) {
     setDragOverIndex(null)
   }, [])
 
+  // ── DB schema browser handlers ─────────────────────────────────────────────
+  const handleBrowse = useCallback(async () => {
+    if (!resolvedConfig) return
+    update({ dbStatus: 'browsing', dbError: undefined })
+    try {
+      const tables = await window.api.pgListTables(resolvedConfig as PgConfig)
+      update({ dbTables: tables, dbStatus: 'browsing' })
+    } catch (err) {
+      update({ dbStatus: 'error', dbError: (err as Error).message })
+    }
+  }, [resolvedConfig, update])
+
+  const handleSelectTable = useCallback(async (schema: string, table: string) => {
+    if (!resolvedConfig) return
+    update({ dbStatus: 'loading', dbSelectedSchema: schema, dbSelectedTable: table })
+    try {
+      const result: ColumnInfo[] = await window.api.pgDescribeTable(resolvedConfig as PgConfig, schema, table)
+      // Align colMap: for each target column, match an upstream inputColumn or add custom entry
+      const aligned: ColMapping[] = result.map((tc) => {
+        const upstream = inputColumns.find((c) => c.name === tc.name)
+        if (upstream) {
+          // Existing pass-through match
+          const existing = colMap.find((m) => m.sourceCol === tc.name)
+          return existing
+            ? existing
+            : { sourceCol: tc.name, destCol: tc.name, included: true }
+        }
+        // Custom entry
+        const existing = colMap.find((m) => !m.sourceCol && m.destCol === tc.name)
+        return existing
+          ? existing
+          : { sourceCol: '', destCol: tc.name, included: true, customExpr: '' }
+      })
+      update({
+        colMap: aligned,
+        dbSelectedSchema: schema,
+        dbSelectedTable: table,
+        dbTargetColumns: result,
+        dbStatus: 'ready',
+      })
+    } catch (err) {
+      update({ dbStatus: 'error', dbError: (err as Error).message })
+    }
+  }, [resolvedConfig, inputColumns, colMap, update])
+
   // ── Derived ───────────────────────────────────────────────────────────────
   const includedCount = colMap.filter((m) => m.included !== false).length
   const subtitle = colMap.length > 0
@@ -91,8 +150,19 @@ function DestinationNode({ id, data, selected }: Props) {
 
   const hasAny = hasInput || colMap.some((m) => !m.sourceCol)
 
+  const filteredTables = dbFilter.trim()
+    ? (dbTables ?? []).filter((t) =>
+        t.name.toLowerCase().includes(dbFilter.toLowerCase()) ||
+        t.schema.toLowerCase().includes(dbFilter.toLowerCase())
+      )
+    : (dbTables ?? [])
+
   return (
     <PipelineNode selected={selected}>
+      {/* Connection input (violet square) */}
+      <Handle type="target" position={Position.Left} id="conn-in"
+        style={connHandle(!!resolvedConfig, { top: 36, left: -7 })}
+      />
       {/* Row input */}
       <Handle type="target" position={Position.Left} id="row-in"
         style={rowHandle(hasInput, { top: '50%', left: -7 })}
@@ -102,7 +172,104 @@ function DestinationNode({ id, data, selected }: Props) {
         style={rowHandle(true, { top: '50%', right: -7 })}
       />
 
-      <NodeHeader def={destinationDef} subtitle={subtitle} />
+      <NodeHeader
+        def={destinationDef}
+        subtitle={subtitle}
+        advancedOpen={advancedOpen}
+        onAdvancedToggle={() => setAdvancedOpen((v) => !v)}
+      />
+
+      {/* ── Advanced: DB schema browser ─────────────────────────────────────── */}
+      {advancedOpen && (
+        /* Use join-col-panel (no bleed margins) instead of advanced-panel,
+           which assumes it lives inside .node-body with 14px padding */
+        <div
+          className="dest-db-panel nodrag"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {!resolvedConfig ? (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              Connect a Connection node (violet handle ↖) to browse a schema.
+            </div>
+          ) : (
+            <>
+              {/* Browse button row — button shrinks, label takes remaining space */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <button
+                  className="dest-db-browse-btn"
+                  onClick={(e) => { stopProp(e); handleBrowse() }}
+                  onMouseDown={stopProp}
+                  disabled={dbStatus === 'browsing' || dbStatus === 'loading'}
+                >
+                  {dbStatus === 'browsing' || dbStatus === 'loading' ? 'Loading…' : 'Browse Schema'}
+                </button>
+                {dbSelectedTable && (
+                  <span style={{
+                    fontSize: 10.5, color: 'var(--text-muted)',
+                    flex: 1, minWidth: 0,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {dbSelectedSchema}.{dbSelectedTable}
+                  </span>
+                )}
+              </div>
+
+              {dbStatus === 'error' && (
+                <div style={{ fontSize: 11, color: 'var(--red)', marginBottom: 6 }}>{dbError}</div>
+              )}
+
+              {(dbStatus === 'browsing' || dbStatus === 'ready') && (dbTables ?? []).length > 0 && (
+                <>
+                  <input
+                    className="node-select"
+                    style={{ width: '100%', marginBottom: 4, fontSize: 11 }}
+                    placeholder="Filter tables…"
+                    value={dbFilter}
+                    onChange={(e) => setDbFilter(e.target.value)}
+                    onClick={stopProp}
+                    onMouseDown={stopProp}
+                  />
+                  <div style={{ maxHeight: 120, overflowY: 'auto', fontSize: 11 }}>
+                    {filteredTables.map((t) => {
+                      const active = t.schema === dbSelectedSchema && t.name === dbSelectedTable
+                      return (
+                        <div
+                          key={`${t.schema}.${t.name}`}
+                          onClick={(e) => { stopProp(e); handleSelectTable(t.schema, t.name) }}
+                          onMouseDown={stopProp}
+                          style={{
+                            padding: '3px 6px',
+                            cursor: 'pointer',
+                            borderRadius: 4,
+                            background: active ? 'rgba(59,130,246,0.18)' : 'transparent',
+                            color: active ? 'var(--blue)' : 'var(--text-dim)',
+                          }}
+                        >
+                          <span style={{ color: 'var(--text-muted)' }}>{t.schema}.</span>{t.name}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+
+              {dbStatus === 'ready' && (dbTargetColumns ?? []).length > 0 && (
+                <div style={{ marginTop: 6, borderTop: '1px solid var(--border)', paddingTop: 4 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Target columns
+                  </div>
+                  {(dbTargetColumns ?? []).map((c) => (
+                    <div key={c.name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, padding: '1px 0', color: 'var(--text-dim)' }}>
+                      <span>{c.name}</span>
+                      <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>{c.type}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── Unified column list ─────────────────────────────────────────────── */}
       {colMap.length > 0 && (
@@ -259,20 +426,33 @@ export const destinationDef: NodeDef<DestinationNodeData> = {
   name: 'Destination',
   desc: 'Shape output columns: rename, filter, reorder, or add new ones',
   Icon: Database,
+  hasAdvanced: true,
   help: {
     summary: 'Maps the incoming row stream to a final output schema. Drag rows to reorder, rename or exclude upstream columns, or add computed columns via SQL expressions.',
-    inputs: 'One row stream (left square). Emitter nodes (green circles) can override specific column values.',
+    inputs: 'One row stream (left square). Emitter nodes (green circles) can override specific column values. A Connection node (violet square) unlocks the schema browser.',
     outputs: 'A remapped row stream (right square) and per-column handles for each included column.',
     tips: [
-      'Drag the ⠿ grip to reorder any column — mix pass-through and custom columns freely.',
+      'Drag the grip to reorder any column — mix pass-through and custom columns freely.',
       'Edit the "Output name" field to rename a column in the result.',
       'Use ✓/✗ to include or exclude an upstream column.',
       'Click "+ Add Column" to create a computed column with any SQL expression.',
+      'Connect a Connection node and use the Advanced panel to align columns to a target DB table.',
     ],
   },
-  inputPorts: [{ type: 'row' }, { type: 'col' }],
+  inputPorts: [{ type: 'row' }, { type: 'col' }, { type: 'conn' }],
   outputPorts: [{ type: 'row' }, { type: 'col' }],
-  defaultData: () => ({ label: 'Output', inputColumns: [], colMap: [] }),
+  defaultData: () => ({
+    label: 'Output',
+    inputColumns: [],
+    colMap: [],
+    resolvedConfig: null,
+    dbTables: [],
+    dbSelectedSchema: null,
+    dbSelectedTable: null,
+    dbTargetColumns: [],
+    dbStatus: 'idle' as const,
+    dbError: undefined,
+  }),
   Component: Memoized,
 }
 

@@ -5,7 +5,7 @@ import type { AppNode, JoinNodeData, JoinColSelection } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle } from './shared/handles'
+import { rowHandle, colHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: JoinNodeData }>
@@ -159,6 +159,35 @@ function JoinNode({ id, data, selected }: Props) {
           Connect both inputs to configure columns.
         </div>
       )}
+
+      {/* Column outputs — shown once both inputs are connected */}
+      {(leftReady || rightReady) && (() => {
+        const outCols = columnSelection.length > 0
+          ? columnSelection.filter(s => s.included).map(s => ({
+              name: s.alias || s.name,
+              type: (s.side === 'left' ? leftColumns : rightColumns).find(c => c.name === s.name)?.type ?? 'TEXT',
+            }))
+          : [
+              ...leftColumns,
+              ...rightColumns.map(c => ({ name: `r_${c.name}`, type: c.type })),
+            ]
+        if (!outCols.length) return null
+        return (
+          <div className="column-list">
+            {outCols.map(col => (
+              <div key={col.name} className="column-row" style={{ position: 'relative' }}>
+                <Handle
+                  type="source" position={Position.Right}
+                  id={`col-out-${col.name}`}
+                  style={colHandle()}
+                />
+                <span className="col-name" title={col.name}>{col.name}</span>
+                <span className="col-type">{col.type}</span>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
 
       <div className="status-row">
         <div className={`status-dot ${isReady ? 'ready' : 'pending'}`} />

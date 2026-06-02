@@ -65,6 +65,13 @@ export interface DestinationNodeData extends Record<string, unknown> {
   label: string
   inputColumns: ColumnInfo[]
   colMap: ColMapping[]
+  resolvedConfig?: PgConfig | null
+  dbTables?: TableEntry[]
+  dbSelectedSchema?: string | null
+  dbSelectedTable?: string | null
+  dbTargetColumns?: ColumnInfo[]
+  dbStatus?: 'idle' | 'browsing' | 'loading' | 'ready' | 'error'
+  dbError?: string
 }
 
 export interface CSVOutputNodeData extends Record<string, unknown> {

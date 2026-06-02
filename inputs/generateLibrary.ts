@@ -485,6 +485,8 @@ async function main() {
 
   const end = Date.now();
 
+
+  await generateExpectedPipelineOutput()
   console.log('---------------------------------------');
   console.log(' COMPLETE');
   console.log('---------------------------------------');
@@ -530,7 +532,7 @@ main().catch((err) => {
  * - benchmark transformations
  */
 
-async function generateExpectedPipelineOutput() {
+async function generateExpectedPipelineOutput() {ç
   console.log('Generating expected pipeline output...');
 
   const outputFile = fs.createWriteStream(

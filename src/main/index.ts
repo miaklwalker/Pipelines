@@ -288,6 +288,22 @@ ipcMain.handle('pg:list-tables', async (_, config: PgConfig): Promise<{ schema: 
   }
 })
 
+// Describe columns of a specific table in a PostgreSQL database
+ipcMain.handle('pg:describe-table', async (_, config: PgConfig, schema: string, tableName: string): Promise<{ name: string; type: string }[]> => {
+  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 8000 })
+  try {
+    const result = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
+      [schema, tableName]
+    )
+    await pool.end()
+    return result.rows.map((r: { column_name: string; data_type: string }) => ({ name: r.column_name, type: normalizeType(r.data_type) }))
+  } catch (err) {
+    await pool.end().catch(() => {})
+    throw err
+  }
+})
+
 // Delete a cached CSV file
 ipcMain.handle('pg:clear-cache', async (_, csvPath: string): Promise<void> => {
   try { await fs.unlink(csvPath) } catch { /* already gone */ }
