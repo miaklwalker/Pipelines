@@ -1,5 +1,5 @@
-import { memo, useCallback, useState } from 'react'
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { memo, useCallback, useEffect, useState } from 'react'
+import { Handle, Position, useReactFlow, useUpdateNodeInternals, type NodeProps } from '@xyflow/react'
 import { Database, X, Plus, GripVertical } from 'lucide-react'
 import type { AppNode, AppEdge, DestinationNodeData, ColMapping, TableEntry, ColumnInfo, PgConfig } from '../lib/types'
 import { propagateColumns } from '../lib/graphUtils'
@@ -13,6 +13,7 @@ type Props = NodeProps<AppNode & { data: DestinationNodeData }>
 
 function DestinationNode({ id, data, selected }: Props) {
   const { setNodes, getEdges } = useReactFlow()
+  const updateNodeInternals = useUpdateNodeInternals()
   const {
     colMap = [],
     resolvedConfig = null,
@@ -43,6 +44,12 @@ function DestinationNode({ id, data, selected }: Props) {
     [id, setNodes, getEdges]
   )
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
+
+  // Re-register handles with React Flow whenever columns change (adds/removes/renames)
+  // so edge lines draw correctly to dynamic col-in-custom-* handles.
+  useEffect(() => {
+    updateNodeInternals(id)
+  }, [id, updateNodeInternals, colMap.length, colMap.map(m => m.destCol).join(',')])
 
   // ── Column mutations (all index-based for simplicity) ─────────────────────
   const updateCol = useCallback((index: number, patch: Partial<ColMapping>) => {

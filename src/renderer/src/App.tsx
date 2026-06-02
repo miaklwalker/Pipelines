@@ -234,6 +234,7 @@ export default function App() {
       setPreviewError('No complete pipeline yet — connect all required inputs.')
       return
     }
+    console.log('[preview SQL]', sql)
     setPreviewLoading(true)
     window.api.dbPreview(sql)
       .then((result) => { setPreviewResult(result); setPreviewLoading(false) })

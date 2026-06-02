@@ -88,6 +88,37 @@ function buildJoinSelect(d: JoinNodeData): string {
 }
 
 /**
+ * Build a SELECT clause that exposes ALL columns using the same names as the
+ * join's col-out handles — so the destination can reference any handle by its
+ * exact handle name without alias translation.
+ *
+ * - Default mode (no columnSelection): left.*, right cols as r_{name}
+ * - columnSelection mode: all left cols by name, all right cols using their
+ *   alias (or r_{name} if no alias) — matching exactly what the handles show.
+ */
+function buildJoinSelectAll(d: JoinNodeData): string {
+  const sel = d.columnSelection ?? []
+
+  if (sel.length > 0) {
+    // Left columns: use raw names (same as handles)
+    const leftParts = (d.leftColumns ?? []).map((c) => `__l."${c.name}"`)
+    // Right columns: use alias if set, otherwise r_{name} — matching the handle names
+    const rightParts = (d.rightColumns ?? []).map((c) => {
+      const entry = sel.find((s) => s.name === c.name && s.side === 'right')
+      const alias = entry?.alias || `r_${c.name}`
+      return `__r."${c.name}" AS "${alias}"`
+    })
+    return [...leftParts, ...rightParts].join(', ') || '__l.*, __r.*'
+  }
+
+  // Default: left.*, right cols with r_ prefix
+  const rightCols = (d.rightColumns ?? [])
+    .map((c) => `__r."${c.name}" AS "r_${c.name}"`)
+    .join(', ')
+  return rightCols ? `__l.*, ${rightCols}` : '__l.*, __r.*'
+}
+
+/**
  * Build the SQL query that produces the output of `nodeId`.
  *
  * `outputHandle` is the sourceHandle the CALLER connected from.
@@ -97,7 +128,8 @@ export function buildNodeSQL(
   nodeId: string,
   nodes: AppNode[],
   edges: AppEdge[],
-  outputHandle?: string
+  outputHandle?: string,
+  opts?: { allColumns?: boolean }
 ): string | null {
   const node = nodes.find((n) => n.id === nodeId)
   if (!node) return null
@@ -123,8 +155,8 @@ export function buildNodeSQL(
         return `SELECT * FROM (${leftSQL}) __l CROSS JOIN (${rightSQL}) __r`
       }
 
-      // Build SELECT clause from columnSelection if available, otherwise default to all cols
-      const selectClause = buildJoinSelect(d)
+      // allColumns: skip columnSelection so all underlying cols are available (used by destination anchor)
+      const selectClause = opts?.allColumns ? buildJoinSelectAll(d) : buildJoinSelect(d)
 
       return (
         `SELECT ${selectClause} FROM (${leftSQL}) __l ` +
@@ -152,12 +184,13 @@ export function buildNodeSQL(
 
     case 'destination': {
       const d = node.data as DestinationNodeData
-      const included = (d.colMap ?? []).filter(m => m.included !== false && !m.sourceCol)
+      const included = (d.colMap ?? []).filter(m => m.included !== false)
       if (!included.length) return null
 
       // Find an anchor row source — either through an emitter's anchor-in, or directly from
       // a data node wired to a col-in handle (e.g. read-table col-out-{name})
       let anchorSQL: string | null = null
+      let anchorNodeId: string | null = null
       for (const m of included) {
         if (!m.destCol) continue
         const colInEdge = edges.find(e => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`)
@@ -166,13 +199,14 @@ export function buildNodeSQL(
         const anchorEdge = edges.find(e => e.target === colInEdge.source && e.targetHandle === 'anchor-in')
         if (anchorEdge) {
           anchorSQL = buildNodeSQL(anchorEdge.source, nodes, edges, anchorEdge.sourceHandle ?? undefined)
-          if (anchorSQL) break
+          if (anchorSQL) { anchorNodeId = anchorEdge.source; break }
         }
-        // Path 2: data node connected directly via col-out — use that node's full row output
+        // Path 2: data node connected directly via col-out — use that node's full row output.
+        // Pass allColumns:true so join nodes expose every underlying column via handle-matching names.
         const srcHandle = colInEdge.sourceHandle ?? ''
         if (srcHandle.startsWith('col-out-')) {
-          anchorSQL = buildNodeSQL(colInEdge.source, nodes, edges)
-          if (anchorSQL) break
+          anchorSQL = buildNodeSQL(colInEdge.source, nodes, edges, undefined, { allColumns: true })
+          if (anchorSQL) { anchorNodeId = colInEdge.source; break }
         }
       }
 
@@ -183,14 +217,45 @@ export function buildNodeSQL(
           // Emitter: use its scalar expression
           const expr = emitterExpression(colInEdge.source, nodes)
           if (expr !== null) return [`(${expr}) AS "${m.destCol}"`]
-          // Data node col-out: reference the column by name from the anchor.
-          // Only valid when anchorSQL was resolved — otherwise there's no FROM to read from.
+
           const srcHandle = colInEdge.sourceHandle ?? ''
           if (srcHandle.startsWith('col-out-') && anchorSQL) {
-            // Strip known prefixes: col-out-pass-, col-out-fail-, col-out-
             const srcCol = srcHandle.replace(/^col-out-(?:pass-|fail-)?/, '')
+
+            // Same node as anchor — handle names already match anchor output.
+            if (colInEdge.source === anchorNodeId) {
+              return [`"${srcCol}" AS "${m.destCol}"`]
+            }
+
+            // Different node — check if it's an input to the anchor join,
+            // so we can resolve the column name in the join's output.
+            const anchorNode = anchorNodeId ? nodes.find(n => n.id === anchorNodeId) : null
+            if (anchorNode?.type === 'join') {
+              const jd = anchorNode.data as JoinNodeData
+              const leftEdge  = edges.find(e => e.target === anchorNodeId && e.targetHandle === 'row-left')
+              const rightEdge = edges.find(e => e.target === anchorNodeId && e.targetHandle === 'row-right')
+              if (leftEdge?.source === colInEdge.source) {
+                // Source is the join's left input → column available by its original name
+                return [`"${srcCol}" AS "${m.destCol}"`]
+              }
+              if (rightEdge?.source === colInEdge.source) {
+                // Source is the join's right input → resolve to the name used in anchor output
+                const sel = jd.columnSelection ?? []
+                const entry = sel.find(s => s.name === srcCol && s.side === 'right')
+                const resolvedName = entry?.alias || `r_${srcCol}`
+                return [`"${resolvedName}" AS "${m.destCol}"`]
+              }
+            }
+
+            // Unrelated node — reference as-is and hope the anchor exposes it
             return [`"${srcCol}" AS "${m.destCol}"`]
           }
+        }
+        // Old pass-through entry (sourceCol set, no col-in wired): reference the
+        // upstream column by name if we have an anchor to read it from.
+        if (m.sourceCol && anchorSQL) {
+          const destName = m.destCol || m.sourceCol
+          return [`"${m.sourceCol}" AS "${destName}"`]
         }
         // Fall back to typed SQL expression
         const expr = m.customExpr?.trim()
