@@ -1,12 +1,12 @@
 import { memo, useCallback, useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
-import { Database, Check, X, Plus, GripVertical } from 'lucide-react'
+import { Database, X, Plus, GripVertical } from 'lucide-react'
 import type { AppNode, AppEdge, DestinationNodeData, ColMapping, TableEntry, ColumnInfo, PgConfig } from '../lib/types'
 import { propagateColumns } from '../lib/graphUtils'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, colHandle, connHandle } from './shared/handles'
+import { colHandle, connHandle } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: DestinationNodeData }>
@@ -14,7 +14,6 @@ type Props = NodeProps<AppNode & { data: DestinationNodeData }>
 function DestinationNode({ id, data, selected }: Props) {
   const { setNodes, getEdges } = useReactFlow()
   const {
-    inputColumns = [],
     colMap = [],
     resolvedConfig = null,
     dbTables = [],
@@ -24,7 +23,6 @@ function DestinationNode({ id, data, selected }: Props) {
     dbStatus = 'idle',
     dbError,
   } = data
-  const hasInput = inputColumns.length > 0
 
   // Panel state
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -114,21 +112,10 @@ function DestinationNode({ id, data, selected }: Props) {
     update({ dbStatus: 'loading', dbSelectedSchema: schema, dbSelectedTable: table })
     try {
       const result: ColumnInfo[] = await window.api.pgDescribeTable(resolvedConfig as PgConfig, schema, table)
-      // Align colMap: for each target column, match an upstream inputColumn or add custom entry
+      // Align colMap to target schema: preserve existing custom entries, add missing ones
       const aligned: ColMapping[] = result.map((tc) => {
-        const upstream = inputColumns.find((c) => c.name === tc.name)
-        if (upstream) {
-          // Existing pass-through match
-          const existing = colMap.find((m) => m.sourceCol === tc.name)
-          return existing
-            ? existing
-            : { sourceCol: tc.name, destCol: tc.name, included: true }
-        }
-        // Custom entry
-        const existing = colMap.find((m) => !m.sourceCol && m.destCol === tc.name)
-        return existing
-          ? existing
-          : { sourceCol: '', destCol: tc.name, included: true, customExpr: '' }
+        const existing = colMap.find((m) => m.destCol === tc.name)
+        return existing ?? { sourceCol: '', destCol: tc.name, included: true, customExpr: '' }
       })
       update({
         colMap: aligned,
@@ -140,15 +127,15 @@ function DestinationNode({ id, data, selected }: Props) {
     } catch (err) {
       update({ dbStatus: 'error', dbError: (err as Error).message })
     }
-  }, [resolvedConfig, inputColumns, colMap, update])
+  }, [resolvedConfig, colMap, update])
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const includedCount = colMap.filter((m) => m.included !== false).length
   const subtitle = colMap.length > 0
     ? `${includedCount} / ${colMap.length} columns`
-    : hasInput ? 'Add or filter columns' : 'No input connected'
+    : 'No columns yet'
 
-  const hasAny = hasInput || colMap.some((m) => !m.sourceCol)
+  const hasAny = colMap.length > 0
 
   const filteredTables = dbFilter.trim()
     ? (dbTables ?? []).filter((t) =>
@@ -162,14 +149,6 @@ function DestinationNode({ id, data, selected }: Props) {
       {/* Connection input (violet square) */}
       <Handle type="target" position={Position.Left} id="conn-in"
         style={connHandle(!!resolvedConfig, { top: 36, left: -7 })}
-      />
-      {/* Row input */}
-      <Handle type="target" position={Position.Left} id="row-in"
-        style={rowHandle(hasInput, { top: '50%', left: -7 })}
-      />
-      {/* Row output */}
-      <Handle type="source" position={Position.Right} id="row-out"
-        style={rowHandle(true, { top: '50%', right: -7 })}
       />
 
       <NodeHeader
@@ -277,111 +256,72 @@ function DestinationNode({ id, data, selected }: Props) {
           {/* Column header */}
           <div className="dest-list-header nodrag">
             <span style={{ width: 14, flexShrink: 0 }} />
-            <span className="dest-list-hdr-label" style={{ flex: 1 }}>Source / Expression</span>
-            <span className="dest-list-hdr-label" style={{ width: 80 }}>Output name</span>
+            <span className="dest-list-hdr-label" style={{ width: 80 }}>Column name</span>
+            <span className="dest-list-hdr-label" style={{ flex: 1, textAlign: 'center' }}>Expression</span>
             <span style={{ width: 20 }} />
           </div>
 
           {colMap.map((m, index) => {
-            const isPass    = !!m.sourceCol
-            const isExcluded = m.included === false
             const isDragging = dragIndex === index
             const isDragOver = dragOverIndex === index && dragIndex !== index
 
             const rowCls = [
-              isPass ? 'dest-column-row' : 'dest-custom-row',
-              'nodrag',          // tell React Flow: don't treat mousedown here as node drag
+              'dest-custom-row',
+              'nodrag',
               isDragging ? 'dest-dragging' : '',
               isDragOver ? 'dest-drag-over' : '',
             ].filter(Boolean).join(' ')
 
             return (
               <div
-                key={isPass ? m.sourceCol : `custom-${index}`}
+                key={`custom-${index}`}
                 className={rowCls}
-                style={isPass ? { opacity: isExcluded ? 0.4 : 1 } : undefined}
                 draggable
                 onDragStart={(e) => onDragStart(e, index)}
                 onDragOver={(e) => onDragOver(e, index)}
                 onDrop={(e) => onDrop(e, index)}
                 onDragEnd={onDragEnd}
               >
-                {/* Drag grip — mouseDown stops node-drag, not column interaction */}
+                {/* Drag grip */}
                 <GripVertical
                   size={11}
                   className="dest-grip"
                   onMouseDown={(e) => { e.stopPropagation() }}
                 />
 
-                {isPass ? (
-                  // ── Pass-through column ─────────────────────────────────
-                  <>
-                    <Handle type="target" position={Position.Left} id={`col-in-${m.sourceCol}`}
-                      style={colHandle({ width: 10, height: 10 })}
-                    />
-                    <span className="dest-src-name" style={{ textDecoration: isExcluded ? 'line-through' : 'none' }}>
-                      {m.sourceCol}
-                    </span>
-                    <input
-                      className="col-rename-input"
-                      value={m.destCol}
-                      title="Rename output column"
-                      onChange={(e) => updateCol(index, { destCol: e.target.value })}
-                      onClick={stopProp} onMouseDown={stopProp}
-                      disabled={isExcluded}
-                    />
-                    <button
-                      className={`col-toggle ${isExcluded ? 'col-toggle-off' : 'col-toggle-on'}`}
-                      title={isExcluded ? 'Include' : 'Exclude'}
-                      onClick={(e) => { stopProp(e); updateCol(index, { included: !m.included }) }}
-                      onMouseDown={stopProp}
-                    >
-                      {isExcluded
-                        ? <X size={10} strokeWidth={2.5} />
-                        : <Check size={10} strokeWidth={2.5} />}
-                    </button>
-                    <Handle type="source" position={Position.Right} id={`col-out-${m.sourceCol}`}
-                      style={colHandle({ width: 10, height: 10 })}
-                    />
-                  </>
-                ) : (
-                  // ── Custom column ───────────────────────────────────────
-                  <>
-                    {m.destCol && (
-                      <Handle type="target" position={Position.Left} id={`col-in-custom-${m.destCol}`}
-                        style={colHandle({ width: 10, height: 10 })}
-                      />
-                    )}
-                    <input
-                      className="dest-custom-input dest-custom-name"
-                      value={m.destCol}
-                      placeholder="col_name"
-                      onChange={(e) => updateCol(index, { destCol: e.target.value })}
-                      onClick={stopProp} onMouseDown={stopProp}
-                    />
-                    <span className="dest-custom-eq">=</span>
-                    <input
-                      className="dest-custom-input dest-custom-expr"
-                      value={m.customExpr ?? ''}
-                      placeholder="expression"
-                      title="SQL expression. Wiring an emitter node overrides this."
-                      onChange={(e) => updateCol(index, { customExpr: e.target.value })}
-                      onClick={stopProp} onMouseDown={stopProp}
-                    />
-                    <button
-                      className="dest-custom-remove"
-                      title="Remove column"
-                      onClick={(e) => { stopProp(e); removeCol(index) }}
-                      onMouseDown={stopProp}
-                    >
-                      <X size={9} strokeWidth={2.5} />
-                    </button>
-                    {m.destCol && (
-                      <Handle type="source" position={Position.Right} id={`col-out-${m.destCol}`}
-                        style={colHandle({ width: 10, height: 10 })}
-                      />
-                    )}
-                  </>
+                {m.destCol && (
+                  <Handle type="target" position={Position.Left} id={`col-in-custom-${m.destCol}`}
+                    style={colHandle({ width: 10, height: 10 })}
+                  />
+                )}
+                <input
+                  className="dest-custom-input dest-custom-name"
+                  value={m.destCol}
+                  placeholder="col_name"
+                  onChange={(e) => updateCol(index, { destCol: e.target.value })}
+                  onClick={stopProp} onMouseDown={stopProp}
+                />
+                <span className="dest-custom-eq">=</span>
+                <input
+                  className="dest-custom-input dest-custom-expr"
+                  value={m.customExpr ?? ''}
+                  placeholder="expression"
+                  title="SQL expression. Wiring an emitter node overrides this."
+                  onChange={(e) => updateCol(index, { customExpr: e.target.value })}
+                  onClick={stopProp} onMouseDown={stopProp}
+                />
+                <button
+                  className="dest-custom-remove"
+                  title="Remove column"
+                  onClick={(e) => { stopProp(e); removeCol(index) }}
+                  onMouseDown={stopProp}
+                >
+                  <X size={9} strokeWidth={2.5} />
+                </button>
+                {m.destCol && (
+                  <Handle type="source" position={Position.Right} id={`col-out-${m.destCol}`}
+                    style={colHandle({ width: 10, height: 10 })}
+                  />
                 )}
               </div>
             )
@@ -403,7 +343,7 @@ function DestinationNode({ id, data, selected }: Props) {
 
       {!hasAny && (
         <div style={{ padding: '0 14px 8px', color: 'var(--text-muted)', fontSize: 11 }}>
-          Connect a row input or add custom columns.
+          Add columns and wire emitter nodes to define the output.
         </div>
       )}
 
@@ -424,27 +364,25 @@ export const destinationDef: NodeDef<DestinationNodeData> = {
   type: 'destination',
   category: 'output',
   name: 'Destination',
-  desc: 'Shape output columns: rename, filter, reorder, or add new ones',
+  desc: 'Define output columns and wire emitter nodes to populate them',
   //@ts-ignore
   Icon: Database,
   hasAdvanced: true,
   help: {
-    summary: 'Maps the incoming row stream to a final output schema. Drag rows to reorder, rename or exclude upstream columns, or add computed columns via SQL expressions.',
-    inputs: 'One row stream (left square). Emitter nodes (green circles) can override specific column values. A Connection node (violet square) unlocks the schema browser.',
-    outputs: 'A remapped row stream (right square) and per-column handles for each included column.',
+    summary: 'Defines the final output schema. Each column gets its value from a wired emitter node or a typed SQL expression. Row count comes from the shared anchor on the emitter nodes.',
+    inputs: 'Emitter nodes (green circles) wired to each column\'s input handle. A Connection node (violet square) unlocks the schema browser.',
+    outputs: 'Per-column handles for each defined column.',
     tips: [
-      'Drag the grip to reorder any column — mix pass-through and custom columns freely.',
-      'Edit the "Output name" field to rename a column in the result.',
-      'Use ✓/✗ to include or exclude an upstream column.',
-      'Click "+ Add Column" to create a computed column with any SQL expression.',
+      'Click "+ Add Column", name it, then wire an emitter to its green input handle.',
+      'Type a SQL expression directly in the "expression" field as an alternative to wiring.',
+      'Drag the grip to reorder columns.',
       'Connect a Connection node and use the Advanced panel to align columns to a target DB table.',
     ],
   },
-  inputPorts: [{ type: 'row' }, { type: 'col' }, { type: 'conn' }],
-  outputPorts: [{ type: 'row' }, { type: 'col' }],
+  inputPorts: [{ type: 'col' }, { type: 'conn' }],
+  outputPorts: [{ type: 'col' }],
   defaultData: () => ({
     label: 'Output',
-    inputColumns: [],
     colMap: [],
     resolvedConfig: null,
     dbTables: [],

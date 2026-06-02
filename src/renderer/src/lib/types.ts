@@ -63,7 +63,6 @@ export interface ColMapping {
 
 export interface DestinationNodeData extends Record<string, unknown> {
   label: string
-  inputColumns: ColumnInfo[]
   colMap: ColMapping[]
   resolvedConfig?: PgConfig | null
   dbTables?: TableEntry[]

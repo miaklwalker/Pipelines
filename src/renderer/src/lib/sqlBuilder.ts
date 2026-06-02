@@ -152,67 +152,38 @@ export function buildNodeSQL(
 
     case 'destination': {
       const d = node.data as DestinationNodeData
-      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
-      if (!inputEdge) {
-        // No row stream — try to build from custom-only columns
-        const customIncluded = (d.colMap ?? []).filter(m => m.included !== false && !m.sourceCol)
-        if (!customIncluded.length) return null
-        const customCols = customIncluded.flatMap((m) => {
-          if (!m.destCol) return []
-          const colInEdge = edges.find(e => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`)
-          if (colInEdge) {
-            const expr = emitterExpression(colInEdge.source, nodes)
-            if (expr !== null) return [`(${expr}) AS "${m.destCol}"`]
-          }
-          const expr = m.customExpr?.trim()
-          if (!expr) return []
-          return [`(${expr}) AS "${m.destCol}"`]
-        })
-        if (!customCols.length) return null
-        return `SELECT ${customCols.join(', ')}`
-      }
-      const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
-      if (!inputSQL) return null
+      const included = (d.colMap ?? []).filter(m => m.included !== false && !m.sourceCol)
+      if (!included.length) return null
 
-      const included = (d.colMap ?? []).filter((m) => m.included !== false)
-      if (!included.length) return `SELECT * FROM (${inputSQL}) __dest`
+      // Find an anchor row source through any wired emitter
+      let anchorSQL: string | null = null
+      for (const m of included) {
+        if (!m.destCol) continue
+        const colInEdge = edges.find(e => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`)
+        if (!colInEdge) continue
+        const anchorEdge = edges.find(e => e.target === colInEdge.source && e.targetHandle === 'anchor-in')
+        if (anchorEdge) {
+          anchorSQL = buildNodeSQL(anchorEdge.source, nodes, edges, anchorEdge.sourceHandle ?? undefined)
+          if (anchorSQL) break
+        }
+      }
 
       const cols = included.flatMap((m) => {
-        const destName = m.destCol || m.sourceCol || 'col'
-
-        // Custom column (user-created, no upstream source)
-        if (!m.sourceCol) {
-          if (!m.destCol) return []   // skip nameless custom cols
-
-          // Emitter wired to col-in-custom-{destCol} takes priority over typed expression
-          const colInEdge = edges.find(
-            (e) => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`
-          )
-          if (colInEdge) {
-            const expr = emitterExpression(colInEdge.source, nodes)
-            if (expr !== null) return [`(${expr}) AS "${m.destCol}"`]
-          }
-
-          // Fall back to typed SQL expression
-          const expr = m.customExpr?.trim()
-          if (!expr) return []   // skip incomplete custom cols
-          return [`(${expr}) AS "${m.destCol}"`]
-        }
-
-        // If an emitter is wired to this column's col-in handle, substitute its expression
-        const colInEdge = edges.find(
-          (e) => e.target === nodeId && e.targetHandle === `col-in-${m.sourceCol}`
-        )
+        if (!m.destCol) return []
+        // Emitter wired to col-in-custom-{destCol} takes priority over typed expression
+        const colInEdge = edges.find(e => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`)
         if (colInEdge) {
           const expr = emitterExpression(colInEdge.source, nodes)
-          if (expr !== null) return [`(${expr}) AS "${destName}"`]
+          if (expr !== null) return [`(${expr}) AS "${m.destCol}"`]
         }
-
-        return [m.destCol && m.destCol !== m.sourceCol
-          ? `"${m.sourceCol}" AS "${m.destCol}"`
-          : `"${m.sourceCol}"`]
+        const expr = m.customExpr?.trim()
+        if (!expr) return []
+        return [`(${expr}) AS "${m.destCol}"`]
       })
-      return `SELECT ${cols.join(', ')} FROM (${inputSQL}) __dest`
+      if (!cols.length) return null
+      return anchorSQL
+        ? `SELECT ${cols.join(', ')} FROM (${anchorSQL}) __dest`
+        : `SELECT ${cols.join(', ')}`
     }
 
     case 'csv-output': {
@@ -454,21 +425,9 @@ export function getNodeOutputColumns(
 
     case 'destination': {
       const d = node.data as DestinationNodeData
-      const inputCols = d.inputColumns ?? []
-      const colMap    = d.colMap ?? []
-      if (!colMap.length) return inputCols
-      return colMap
-        .filter((m) => m.included !== false)
-        .flatMap((m) => {
-          if (!m.sourceCol) {
-            // Custom column — only include if it has a name and expression
-            return m.destCol && m.customExpr?.trim()
-              ? [{ name: m.destCol, type: 'TEXT' as const }]
-              : []
-          }
-          const orig = inputCols.find((c) => c.name === m.sourceCol)
-          return [{ name: m.destCol || m.sourceCol, type: orig?.type ?? 'TEXT' }]
-        })
+      return (d.colMap ?? [])
+        .filter((m) => m.included !== false && m.destCol)
+        .map((m) => ({ name: m.destCol!, type: 'TEXT' as const }))
     }
 
     case 'csv-output':

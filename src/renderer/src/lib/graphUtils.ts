@@ -49,28 +49,14 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
 
     // ── Destination ───────────────────────────────────────────────────────────
     if (node.type === 'destination') {
-      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
-      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
       const d = node.data as DestinationNodeData
-      const existingMap = d.colMap ?? []
-      // Custom columns the user created (sourceCol === '') — always preserved
-      const customCols = existingMap.filter((m) => !m.sourceCol)
-      // Upstream pass-through columns: respect user's drag order from existingMap,
-      // then append any new upstream columns not yet in existingMap
-      const inputColNames = new Set(inputCols.map((c) => c.name))
-      const orderedPassThrough = existingMap
-        .filter((m) => m.sourceCol && inputColNames.has(m.sourceCol))
-      const existingSourceCols = new Set(orderedPassThrough.map((m) => m.sourceCol))
-      const newCols = inputCols
-        .filter((col) => !existingSourceCols.has(col.name))
-        .map((col) => ({ sourceCol: col.name, destCol: col.name, included: true }))
       const connEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'conn-in')
       let resolvedConfig: import('./types').PgConfig | null = null
       if (connEdge) {
         const connNode = nodes.find((n) => n.id === connEdge.source && n.type === 'connection')
         if (connNode) resolvedConfig = (connNode.data as ConnectionNodeData).config
       }
-      return { ...node, data: { ...d, inputColumns: inputCols, colMap: [...orderedPassThrough, ...newCols, ...customCols], resolvedConfig } }
+      return { ...node, data: { ...d, resolvedConfig } }
     }
 
     // ── Merge ─────────────────────────────────────────────────────────────────
