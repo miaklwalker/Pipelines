@@ -7,6 +7,7 @@ import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, colHandle, connHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
+import { ColumnList } from './shared/columns'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ReadTableNodeData }>
@@ -51,14 +52,14 @@ function ReadTableNode({ id, data, selected }: Props) {
 
   const isConnected = !!resolvedConfig
   const isReady = status === 'ready' && !!csvPath
-  const canFetch  = isConnected && !!query && status !== 'fetching'
+  const canFetch = isConnected && !!query && status !== 'fetching'
 
   const subtitle = isReady
     ? `${rowCount?.toLocaleString()} rows · ${columns.length} cols`
     : status === 'fetching' ? 'Fetching…'
-    : status === 'error' ? 'Fetch error'
-    : isConnected ? (query ? 'Click Fetch to load data' : 'Enter table name or SQL')
-    : 'Connect a database'
+      : status === 'error' ? 'Fetch error'
+        : isConnected ? (query ? 'Click Fetch to load data' : 'Enter table name or SQL')
+          : 'Connect a database'
 
   return (
     <PipelineNode selected={selected}>
@@ -75,39 +76,46 @@ function ReadTableNode({ id, data, selected }: Props) {
       <NodeHeader def={readTableDef} id={id} subtitle={subtitle} />
 
       <div className="node-body">
-        {/* Mode toggle */}
-        <div className="node-body-row">
-          <span className="node-label">Mode</span>
-          <div className="node-toggle-group" onClick={stopProp} onMouseDown={stopProp}>
-            <button className={`node-toggle-btn${readMode === 'table' ? ' active' : ''}`} onClick={() => update({ readMode: 'table' })}>Table</button>
-            <button className={`node-toggle-btn${readMode === 'sql'   ? ' active' : ''}`} onClick={() => update({ readMode: 'sql'   })}>SQL</button>
-          </div>
-        </div>
 
-        {readMode === 'table' ? (
-          <div className="node-body-row">
-            <span className="node-label">Table</span>
-            <input
-              className="node-input"
-              placeholder="table_name"
-              value={tableName}
-              onChange={(e) => update({ tableName: e.target.value })}
-              onClick={stopProp} onMouseDown={stopProp}
-            />
-          </div>
-        ) : (
-          <div className="node-body-row" style={{ alignItems: 'flex-start' }}>
-            <span className="node-label" style={{ marginTop: 4 }}>SQL</span>
-            <textarea
-              className="node-input db-sql-area"
-              placeholder="SELECT * FROM …"
-              value={customSQL}
-              rows={3}
-              onChange={(e) => update({ customSQL: e.target.value })}
-              onClick={stopProp} onMouseDown={stopProp}
-            />
-          </div>
-        )}
+        {
+          !isReady && (
+            <>
+              {/* Mode toggle */}
+              <div className="node-body-row">
+                <span className="node-label">Mode</span>
+                <div className="node-toggle-group" onClick={stopProp} onMouseDown={stopProp}>
+                  <button className={`node-toggle-btn${readMode === 'table' ? ' active' : ''}`} onClick={() => update({ readMode: 'table' })}>Table</button>
+                  <button className={`node-toggle-btn${readMode === 'sql' ? ' active' : ''}`} onClick={() => update({ readMode: 'sql' })}>SQL</button>
+                </div>
+              </div>
+              {readMode === 'table' ? (
+                <div className="node-body-row">
+                  <span className="node-label">Table</span>
+                  <input
+                    className="node-input"
+                    placeholder="table_name"
+                    value={tableName}
+                    onChange={(e) => update({ tableName: e.target.value })}
+                    onClick={stopProp} onMouseDown={stopProp}
+                  />
+                </div>
+              ) : (
+                <div className="node-body-row" style={{ alignItems: 'flex-start' }}>
+                  <span className="node-label" style={{ marginTop: 4 }}>SQL</span>
+                  <textarea
+                    className="node-input db-sql-area"
+                    placeholder="SELECT * FROM …"
+                    value={customSQL}
+                    rows={3}
+                    onChange={(e) => update({ customSQL: e.target.value })}
+                    onClick={stopProp} onMouseDown={stopProp}
+                  />
+                </div>
+              )}
+
+            </>
+          )
+        }
 
         {/* Fetch button */}
         <button
@@ -118,8 +126,8 @@ function ReadTableNode({ id, data, selected }: Props) {
           {status === 'fetching'
             ? <><Loader size={11} strokeWidth={2} className="spin" />Fetching…</>
             : status === 'ready'
-            ? <><RefreshCw size={11} strokeWidth={2} />Re-fetch</>
-            : <>Fetch Data</>}
+              ? <><RefreshCw size={11} strokeWidth={2} />Re-fetch</>
+              : <>Fetch Data</>}
         </button>
 
         {error && <div className="db-error-msg">{error}</div>}
@@ -127,29 +135,16 @@ function ReadTableNode({ id, data, selected }: Props) {
 
       {/* Column list */}
       {isReady && columns.length > 0 && (
-        <div className="column-list">
-          {columns.map((col) => (
-            <div key={col.name} className="column-row" style={{ position: 'relative' }}>
-              <Handle
-                type="source" position={Position.Right}
-                id={`col-out-${col.name}`}
-                style={colHandle()}
-              />
-              <span className="col-name" title={col.name}>{col.name}</span>
-              <span className="col-type">{col.type}</span>
-            </div>
-          ))}
-        </div>
+        <ColumnList columns={columns} />
       )}
-
       <div className="status-row">
         <div className={`status-dot ${isReady ? 'ready' : status === 'error' ? 'error' : 'pending'}`} />
         <span className="status-text">
           {status === 'ready' ? `${rowCount?.toLocaleString() ?? '?'} rows loaded`
             : status === 'fetching' ? 'Fetching from database…'
-            : status === 'error' ? 'Fetch failed'
-            : !isConnected ? 'Connect a database node'
-            : 'Ready to fetch'}
+              : status === 'error' ? 'Fetch failed'
+                : !isConnected ? 'Connect a database node'
+                  : 'Ready to fetch'}
         </span>
         {isReady && (
           <span style={{ marginLeft: 'auto', fontSize: 9.5, color: 'var(--text-muted)' }}>
@@ -185,7 +180,7 @@ export const readTableDef: NodeDef<ReadTableNodeData> = {
       'The fetched data is stored as a temp CSV — pipeline SQL runs entirely in DuckDB after the initial load.',
     ],
   },
-  inputPorts:  [{ type: 'conn' }],
+  inputPorts: [{ type: 'conn' }],
   outputPorts: [{ type: 'row' }],
   defaultData: () => ({
     readMode: 'table', tableName: '', customSQL: '',

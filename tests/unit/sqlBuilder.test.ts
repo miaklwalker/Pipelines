@@ -7,6 +7,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { buildNodeSQL, getNodeOutputColumns } from '../../src/renderer/src/lib/sqlBuilder'
+import { propagateColumns } from '../../src/renderer/src/lib/graphUtils'
 import type { AppNode, AppEdge } from '../../src/renderer/src/lib/types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -648,6 +649,275 @@ describe('destination', () => {
     const sql = buildNodeSQL('n2', [src, sv, d], [e1, colEdge])!
     // The emitter expression replaces the source column reference; alias still appears as dest name
     expect(sql).toContain("('US') AS \"country\"")
+  })
+
+  it('falls back to NULL when a stale source column is not present upstream', () => {
+    const upstream = csvNode('n1', '/f.csv', ['brand', 'user_who_requested', 'user_who_approved'])
+    const d: AppNode = {
+      id: 'n2', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        inputColumns: [],
+        colMap: [{ sourceCol: 'user_id', destCol: 'created_by', included: true }],
+      },
+    } as AppNode
+
+    const sql = buildNodeSQL('n2', [upstream, d], [edge('e1', 'n1', 'n2')])!
+    expect(sql).toContain('NULL AS "created_by"')
+    expect(sql).not.toContain('"user_id" AS "created_by"')
+  })
+
+  it('syncs destination sourceCol from a wired column handle', () => {
+    const upstream = csvNode('n1', '/f.csv', ['brand', 'user_who_requested', 'user_who_approved'])
+    const d: AppNode = {
+      id: 'n2', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        inputColumns: [],
+        colMap: [{ sourceCol: 'user_id', destCol: 'created_by', included: true }],
+      },
+    } as AppNode
+
+    const propagated = propagateColumns(
+      [upstream, d],
+      [edge('e1', 'n1', 'n2'), edge('e2', 'n1', 'n2', 'col-out-user_who_requested', 'col-in-custom-created_by')]
+    )
+
+    const nextDest = propagated.find((node) => node.id === 'n2')!
+    expect((nextDest.data as DestinationNodeData).colMap[0].sourceCol).toBe('user_who_requested')
+
+    const sql = buildNodeSQL('n2', propagated, [edge('e1', 'n1', 'n2'), edge('e2', 'n1', 'n2', 'col-out-user_who_requested', 'col-in-custom-created_by')])!
+    expect(sql).toContain('"user_who_requested" AS "created_by"')
+  })
+
+  it('uses a single orphaned destination col edge when mapping is otherwise unresolved', () => {
+    const upstream = csvNode('n1', '/f.csv', ['id', 'user_id', 'brand'])
+    const d: AppNode = {
+      id: 'n2', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        inputColumns: [],
+        colMap: [
+          { sourceCol: 'id', destCol: 'id', included: true },
+          { sourceCol: '', destCol: 'created_by', included: true },
+        ],
+      },
+    } as AppNode
+
+    // Simulate an old edge handle left behind after renaming destination column.
+    const sql = buildNodeSQL('n2', [upstream, d], [
+      edge('e1', 'n1', 'n2'),
+      edge('e2', 'n1', 'n2', 'col-out-user_id', 'col-in-custom-user_id'),
+    ])!
+
+    expect(sql).toContain('"user_id" AS "created_by"')
+    expect(sql).not.toContain('NULL AS "created_by"')
+  })
+
+  it('matches orphaned destination col edge by sourceCol even with multiple unresolved by-columns', () => {
+    const upstream = csvNode('n1', '/f.csv', ['id', 'user_id', 'brand'])
+    const d: AppNode = {
+      id: 'n2', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        inputColumns: [],
+        colMap: [
+          { sourceCol: 'id', destCol: 'id', included: true },
+          { sourceCol: 'user_id', destCol: 'created_by', included: true },
+          { sourceCol: '', destCol: 'updated_by', included: true },
+          { sourceCol: '', destCol: 'deleted_by', included: true },
+          { sourceCol: '', destCol: 'approved_by', included: true },
+        ],
+      },
+    } as AppNode
+
+    const sql = buildNodeSQL('n2', [upstream, d], [
+      edge('e1', 'n1', 'n2'),
+      edge('e2', 'n1', 'n2', 'col-out-user_id', 'col-in-custom-user_id'),
+    ])!
+
+    expect(sql).toContain('"user_id" AS "created_by"')
+    expect(sql).toContain('NULL AS "updated_by"')
+    expect(sql).toContain('NULL AS "deleted_by"')
+    expect(sql).toContain('NULL AS "approved_by"')
+  })
+
+  it('chooses the best inferred anchor when destination mixes id and r_id column sources', () => {
+    const brands = csvNode('n1', '/brands.csv', ['id', 'brand', 'user_who_requested'])
+    const users = csvNode('n2', '/users.csv', ['id', 'name'])
+    const join: AppNode = {
+      id: 'n3', type: 'join', position: pos,
+      data: {
+        joinType: 'INNER',
+        leftKey: 'user_who_requested', rightKey: 'name',
+        leftColumns: [
+          { name: 'id', type: 'TEXT' },
+          { name: 'brand', type: 'TEXT' },
+          { name: 'user_who_requested', type: 'TEXT' },
+        ],
+        rightColumns: [
+          { name: 'id', type: 'TEXT' },
+          { name: 'name', type: 'TEXT' },
+        ],
+      },
+    } as AppNode
+
+    const dest: AppNode = {
+      id: 'n4', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        inputColumns: [],
+        colMap: [
+          { sourceCol: 'id', destCol: 'id', included: true },
+          { sourceCol: 'r_id', destCol: 'created_by', included: true },
+        ],
+      },
+    } as AppNode
+
+    const sql = buildNodeSQL('n4', [brands, users, join, dest], [
+      edge('e1', 'n1', 'n3', 'row-out', 'row-left'),
+      edge('e2', 'n2', 'n3', 'row-out', 'row-right'),
+      edge('e4', 'n1', 'n4', 'col-out-id', 'col-in-id'),
+      edge('e5', 'n3', 'n4', 'col-out-r_id', 'col-in-created_by'),
+    ])!
+
+    expect(sql).toContain('"id" AS "id"')
+    expect(sql).toContain('"r_id" AS "created_by"')
+    expect(sql).not.toContain('NULL AS "created_by"')
+  })
+
+  it('can resolve sourceCol-only r_id mapping even when id is wired from a different source', () => {
+    const brands = csvNode('n1', '/brands.csv', ['id', 'brand', 'user_who_requested'])
+    const users = csvNode('n2', '/users.csv', ['id', 'name'])
+    const join: AppNode = {
+      id: 'n3', type: 'join', position: pos,
+      data: {
+        joinType: 'INNER',
+        leftKey: 'user_who_requested', rightKey: 'name',
+        leftColumns: [
+          { name: 'id', type: 'TEXT' },
+          { name: 'brand', type: 'TEXT' },
+          { name: 'user_who_requested', type: 'TEXT' },
+        ],
+        rightColumns: [
+          { name: 'id', type: 'TEXT' },
+          { name: 'name', type: 'TEXT' },
+        ],
+      },
+    } as AppNode
+
+    const dest: AppNode = {
+      id: 'n4', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        inputColumns: [],
+        colMap: [
+          { sourceCol: 'id', destCol: 'id', included: true },
+          { sourceCol: 'r_id', destCol: 'created_by', included: true },
+        ],
+      },
+    } as AppNode
+
+    const sql = buildNodeSQL('n4', [brands, users, join, dest], [
+      edge('e1', 'n1', 'n3', 'row-out', 'row-left'),
+      edge('e2', 'n2', 'n3', 'row-out', 'row-right'),
+      edge('e3', 'n1', 'n4', 'col-out-id', 'col-in-id'),
+    ])!
+
+    expect(sql).toContain('"id" AS "id"')
+    expect(sql).toContain('"r_id" AS "created_by"')
+    expect(sql).not.toContain('NULL AS "created_by"')
+  })
+
+  it('can resolve sourceCol-only r_id mapping with no destination col wires', () => {
+    const brands = csvNode('n1', '/brands.csv', ['id', 'brand', 'user_who_requested'])
+    const users = csvNode('n2', '/users.csv', ['id', 'name'])
+    const join: AppNode = {
+      id: 'n3', type: 'join', position: pos,
+      data: {
+        joinType: 'INNER',
+        leftKey: 'user_who_requested', rightKey: 'name',
+        leftColumns: [
+          { name: 'id', type: 'TEXT' },
+          { name: 'brand', type: 'TEXT' },
+          { name: 'user_who_requested', type: 'TEXT' },
+        ],
+        rightColumns: [
+          { name: 'id', type: 'TEXT' },
+          { name: 'name', type: 'TEXT' },
+        ],
+      },
+    } as AppNode
+
+    const dest: AppNode = {
+      id: 'n4', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        inputColumns: [],
+        colMap: [
+          { sourceCol: 'r_id', destCol: 'created_by', included: true },
+          { sourceCol: 'r_id', destCol: 'updated_by', included: true },
+        ],
+      },
+    } as AppNode
+
+    const sql = buildNodeSQL('n4', [brands, users, join, dest], [
+      edge('e1', 'n1', 'n3', 'row-out', 'row-left'),
+      edge('e2', 'n2', 'n3', 'row-out', 'row-right'),
+    ])!
+
+    expect(sql).toContain('"r_id" AS "created_by"')
+    expect(sql).toContain('"r_id" AS "updated_by"')
+    expect(sql).not.toContain('NULL AS "created_by"')
+    expect(sql).not.toContain('NULL AS "updated_by"')
+  })
+
+  it('recovers single stale r_id orphan edge for *_by targets when many unresolved destination columns exist', () => {
+    const brands = csvNode('n1', '/brands.csv', ['id', 'brand', 'user_who_requested'])
+    const users = csvNode('n2', '/users.csv', ['id', 'name'])
+    const join: AppNode = {
+      id: 'n3', type: 'join', position: pos,
+      data: {
+        joinType: 'INNER',
+        leftKey: 'user_who_requested', rightKey: 'name',
+        leftColumns: [
+          { name: 'id', type: 'TEXT' },
+          { name: 'brand', type: 'TEXT' },
+          { name: 'user_who_requested', type: 'TEXT' },
+        ],
+        rightColumns: [
+          { name: 'id', type: 'TEXT' },
+          { name: 'name', type: 'TEXT' },
+        ],
+      },
+    } as AppNode
+
+    const dest: AppNode = {
+      id: 'n4', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        inputColumns: [],
+        colMap: [
+          { sourceCol: 'id', destCol: 'id', included: true },
+          { sourceCol: '', destCol: 'created_by', included: true },
+          { sourceCol: '', destCol: 'updated_by', included: true },
+          { sourceCol: '', destCol: 'deleted_by', included: true },
+          { sourceCol: 'brand', destCol: 'name', included: true },
+        ],
+      },
+    } as AppNode
+
+    const sql = buildNodeSQL('n4', [brands, users, join, dest], [
+      edge('e1', 'n1', 'n3', 'row-out', 'row-left'),
+      edge('e2', 'n2', 'n3', 'row-out', 'row-right'),
+      edge('e3', 'n1', 'n4', 'col-out-id', 'col-in-id'),
+      // Stale target handle (does not match any current destination column handle).
+      edge('e4', 'n3', 'n4', 'col-out-r_id', 'col-in-custom-old_user_id'),
+    ])!
+
+    expect(sql).toContain('"id" AS "id"')
+    expect(sql).toContain('"r_id" AS "created_by"')
+    expect(sql).toContain('NULL AS "updated_by"')
   })
 })
 

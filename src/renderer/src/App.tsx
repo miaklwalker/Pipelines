@@ -25,10 +25,12 @@ import type {
   AppNode, AppEdge,
   CSVNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
+  ConcatNodeData,
   UniqueNodeData, MapValueData, ConditionalOutputData,
   SortNodeData, LimitNodeData, AggregateNodeData,
   ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
   BrowseSchemaNodeData,
+  MaterializeNodeData,
   PreviewResult,
 } from './lib/types'
 
@@ -94,6 +96,7 @@ function nodeLabel(node: AppNode | undefined): string {
   if (node.type === 'destination') return 'Destination'
   if (node.type === 'csv-output')  return 'CSV Export'
   if (node.type === 'merge')           return 'Merge'
+  if (node.type === 'concat')          return 'Concat'
   if (node.type === 'filter')          return 'Filter'
   if (node.type === 'static-value')        return 'Static Value'
   if (node.type === 'increment-value')     return 'Increment'
@@ -286,6 +289,12 @@ export default function App() {
           data: { inputColumns: [] } satisfies MergeNodeData,
         }])
         break
+      case 'concat':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'concat', position: spawnPosition(),
+          data: { inputColumns: [] } satisfies ConcatNodeData,
+        }])
+        break
       case 'filter':
         setNodes((ns) => [...ns, {
           id: uuid(), type: 'filter', position: spawnPosition(),
@@ -338,6 +347,12 @@ export default function App() {
         setNodes((ns) => [...ns, {
           id: uuid(), type: 'aggregate', position: spawnPosition(),
           data: { groupBy: [], aggregations: [], inputColumns: [] } satisfies AggregateNodeData,
+        }])
+        break
+      case 'materialize':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'materialize', position: spawnPosition(),
+          data: { parquetPath: null, columns: [], status: 'idle', rowCount: null } satisfies MaterializeNodeData,
         }])
         break
       case 'connection':
@@ -397,16 +412,16 @@ export default function App() {
 
   // ── Load project ──────────────────────────────────────────────────────────
   const loadProject = useCallback(async () => {
-    const raw = await window.api.loadProject()
-    if (!raw) return
+    const loaded = await window.api.loadProject()
+    if (!loaded) return
     try {
-      const parsed = JSON.parse(raw) as { version: number; nodes: AppNode[]; edges: AppEdge[] }
+      const parsed = JSON.parse(loaded.data) as { version: number; nodes: AppNode[]; edges: AppEdge[] }
       if (!parsed.nodes || !parsed.edges) throw new Error('Invalid file format')
       nodeCounter = parsed.nodes.length
       setNodes(parsed.nodes)
       setEdges(parsed.edges)
-      setCurrentFilePath(null) // loaded file doesn't track a save path (would need to store it in the .pipes file)
-      showToast('Pipeline loaded')
+      setCurrentFilePath(loaded.path)
+      showToast(`Pipeline loaded → ${loaded.path.split(/[/\\]/).pop()}`)
     } catch (err) {
       showToast('Failed to load: ' + (err instanceof Error ? err.message : String(err)))
     }
@@ -476,14 +491,38 @@ export default function App() {
           const result = await window.api.pgWrite(d.resolvedConfig!, sql, d.tableName, d.writeMode)
           showToast(`✓ Wrote ${result.rowCount.toLocaleString()} rows → ${d.tableName}`)
         } else if (sink.type === 'csv-output') {
+          const d = sink.data as CSVOutputNodeData
           const sql = buildNodeSQL(sink.id, nodesRef.current, edgesRef.current)
           if (!sql) throw new Error('Could not build SQL for CSV Export')
-          const result = await window.api.exportCSV(sql)
+          const hasKnownPath = Boolean(d.outputPath && d.outputPath.trim())
+          const delimChar = d.delimiter === 'semicolon' ? ';'
+            : d.delimiter === 'pipe' ? '|'
+            : d.delimiter === 'tab' ? '\t'
+            : ','
+          const result = await window.api.exportCSV(
+            sql,
+            delimChar,
+            d.includeHeader,
+            hasKnownPath ? d.outputPath : undefined,
+            hasKnownPath
+          )
           if (!result) {
             // User cancelled the save dialog — reset this node to idle
             setNodeExecState((s) => ({ ...s, [sink.id]: 'idle' }))
             continue
           }
+          setNodes((ns) => ns.map((n) =>
+            n.id === sink.id
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    outputPath: result.filePath,
+                    lastExport: { rowCount: result.rowCount, timestamp: new Date().toLocaleTimeString() },
+                  },
+                }
+              : n
+          ))
           showToast(`✓ Exported ${result.rowCount?.toLocaleString() ?? '?'} rows`)
         }
         setNodeExecState((s) => ({ ...s, [sink.id]: 'done' }))

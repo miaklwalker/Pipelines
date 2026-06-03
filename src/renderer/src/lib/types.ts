@@ -85,6 +85,10 @@ export interface MergeNodeData extends Record<string, unknown> {
   inputColumns: ColumnInfo[]   // columns from left input (both sides must match)
 }
 
+export interface ConcatNodeData extends Record<string, unknown> {
+  inputColumns: ColumnInfo[]   // columns from the primary input used for output schema
+}
+
 export interface FilterNodeData extends Record<string, unknown> {
   condition: string            // SQL boolean expression for the WHERE clause
   inputColumns: ColumnInfo[]
@@ -205,6 +209,15 @@ export interface ConditionalOutputData extends Record<string, unknown> {
   hasAnchor?: boolean
 }
 
+export interface MaterializeNodeData extends Record<string, unknown> {
+  /** Path to the written parquet file; null = not yet materialized */
+  parquetPath: string | null
+  columns: ColumnInfo[]
+  status: 'idle' | 'running' | 'done' | 'error'
+  error?: string
+  rowCount: number | null
+}
+
 // ─── Schema browser ──────────────────────────────────────────────────────────
 
 export interface TableEntry {
@@ -228,12 +241,14 @@ export interface BrowseSchemaNodeData extends Record<string, unknown> {
 // ─── Union node type ─────────────────────────────────────────────────────────
 
 export type AppNode =
+  | Node<MaterializeNodeData,    'materialize'>
   | Node<CSVNodeData,            'csv-input'>
   | Node<JoinNodeData,           'join'>
   | Node<TransformNodeData,      'transform'>
   | Node<DestinationNodeData,    'destination'>
   | Node<CSVOutputNodeData,      'csv-output'>
   | Node<MergeNodeData,          'merge'>
+  | Node<ConcatNodeData,         'concat'>
   | Node<FilterNodeData,         'filter'>
   | Node<StaticValueData,        'static-value'>
   | Node<IncrementValueData,     'increment-value'>

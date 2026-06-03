@@ -7,6 +7,7 @@ import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, colHandle, connHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
+import { ColumnList } from './shared/columns'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: BrowseSchemaNodeData }>
@@ -167,19 +168,7 @@ function BrowseSchemaNode({ id, data, selected }: Props) {
 
       {/* Column list after fetch */}
       {isReady && columns.length > 0 && (
-        <div className="column-list">
-          {columns.map((col) => (
-            <div key={col.name} className="column-row" style={{ position: 'relative' }}>
-              <Handle
-                type="source" position={Position.Right}
-                id={`col-out-${col.name}`}
-                style={colHandle()}
-              />
-              <span className="col-name" title={col.name}>{col.name}</span>
-              <span className="col-type">{col.type}</span>
-            </div>
-          ))}
-        </div>
+        <ColumnList columns={columns} />
       )}
 
       <div className="status-row">

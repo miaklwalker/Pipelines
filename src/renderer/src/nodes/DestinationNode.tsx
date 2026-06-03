@@ -12,7 +12,7 @@ import { rowHandle, colHandle, connHandle } from './shared/handles'
 type Props = NodeProps<AppNode & { data: DestinationNodeData }>
 
 function DestinationNode({ id, data, selected }: Props) {
-  const { setNodes, getEdges } = useReactFlow()
+  const { setNodes, setEdges, getEdges } = useReactFlow()
   const updateNodeInternals = useUpdateNodeInternals()
   const {
     colMap = [],
@@ -53,8 +53,35 @@ function DestinationNode({ id, data, selected }: Props) {
 
   // ── Column mutations (all index-based for simplicity) ─────────────────────
   const updateCol = useCallback((index: number, patch: Partial<ColMapping>) => {
-    update({ colMap: colMap.map((m, i) => i === index ? { ...m, ...patch } : m) })
-  }, [colMap, update])
+    const current = colMap[index]
+    const nextName = patch.destCol?.trim() ?? current?.destCol ?? ''
+    const prevName = current?.destCol ?? ''
+
+    const nextColMap = colMap.map((m, i) => i === index ? { ...m, ...patch, destCol: nextName } : m)
+
+    if (prevName && nextName && prevName !== nextName) {
+      const nextEdges = getEdges().map((edge) => {
+        if (edge.target === id) {
+          if (edge.targetHandle === `col-in-custom-${prevName}` || edge.targetHandle === `col-in-${prevName}`) {
+            return { ...edge, targetHandle: `col-in-custom-${nextName}` }
+          }
+        }
+        if (edge.source === id && edge.sourceHandle === `col-out-${prevName}`) {
+          return { ...edge, sourceHandle: `col-out-${nextName}` }
+        }
+        return edge
+      })
+
+      setEdges(nextEdges)
+      setNodes((ns) => {
+        const updated = ns.map((n) => n.id === id ? { ...n, data: { ...n.data, colMap: nextColMap } } : n)
+        return propagateColumns(updated as AppNode[], nextEdges as AppEdge[])
+      })
+      return
+    }
+
+    update({ colMap: nextColMap })
+  }, [colMap, getEdges, id, setEdges, setNodes, update])
 
   const removeCol = useCallback((index: number) => {
     update({ colMap: colMap.filter((_, i) => i !== index) })

@@ -9,6 +9,14 @@ import type {
   ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData,
 } from './types'
 
+function sourceColumnFromHandle(sourceHandle: string | null | undefined): string | null {
+  if (!sourceHandle) return null
+  if (sourceHandle.startsWith('col-out-pass-')) return sourceHandle.slice('col-out-pass-'.length)
+  if (sourceHandle.startsWith('col-out-fail-')) return sourceHandle.slice('col-out-fail-'.length)
+  if (sourceHandle.startsWith('col-out-')) return sourceHandle.slice('col-out-'.length)
+  return null
+}
+
 // ── Column propagation ────────────────────────────────────────────────────────
 
 export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
@@ -56,11 +64,28 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
         const connNode = nodes.find((n) => n.id === connEdge.source && n.type === 'connection')
         if (connNode) resolvedConfig = (connNode.data as ConnectionNodeData).config
       }
-      return { ...node, data: { ...d, resolvedConfig } }
+
+      const nextColMap = (d.colMap ?? []).map((mapping) => {
+        if (!mapping.destCol) return mapping
+
+        const inputEdge = edges.find((e) =>
+          e.target === node.id && (
+            e.targetHandle === `col-in-custom-${mapping.destCol}`
+            || e.targetHandle === `col-in-${mapping.destCol}`
+          )
+        )
+
+        const wiredSourceCol = sourceColumnFromHandle(inputEdge?.sourceHandle)
+        return wiredSourceCol && wiredSourceCol !== mapping.sourceCol
+          ? { ...mapping, sourceCol: wiredSourceCol }
+          : mapping
+      })
+
+      return { ...node, data: { ...d, resolvedConfig, colMap: nextColMap } }
     }
 
     // ── Merge ─────────────────────────────────────────────────────────────────
-    if (node.type === 'merge') {
+    if (node.type === 'merge' || node.type === 'concat') {
       const leftEdge  = edges.find((e) => e.target === node.id && e.targetHandle === 'row-left')
       const rightEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-right')
       const srcEdge   = leftEdge ?? rightEdge

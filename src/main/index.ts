@@ -106,20 +106,38 @@ ipcMain.handle('db:preview', async (_, { sql }: { sql: string }): Promise<Previe
 })
 
 // Export a SQL query result to a CSV file using DuckDB COPY
-ipcMain.handle('csv:export', async (_, { sql, delimiter = ',' }: { sql: string; delimiter?: string }): Promise<ExportResult | null> => {
-  const { canceled, filePath } = await dialog.showSaveDialog({
-    title: 'Export CSV',
-    defaultPath: 'output.csv',
-    filters: [{ name: 'CSV File', extensions: ['csv'] }]
-  })
-  if (canceled || !filePath) return null
+ipcMain.handle('csv:export', async (_, {
+  sql,
+  delimiter = ',',
+  includeHeader = true,
+  defaultPath,
+  skipDialogIfDefaultPath = false,
+}: {
+  sql: string
+  delimiter?: string
+  includeHeader?: boolean
+  defaultPath?: string
+  skipDialogIfDefaultPath?: boolean
+}): Promise<ExportResult | null> => {
+  let filePath: string | undefined
+  if (skipDialogIfDefaultPath && defaultPath?.trim()) {
+    filePath = defaultPath.trim()
+  } else {
+    const dialogResult = await dialog.showSaveDialog({
+      title: 'Export CSV',
+      defaultPath: defaultPath?.trim() || 'output.csv',
+      filters: [{ name: 'CSV File', extensions: ['csv'] }]
+    })
+    if (dialogResult.canceled || !dialogResult.filePath) return null
+    filePath = dialogResult.filePath
+  }
 
   const safe      = filePath.replace(/'/g, "''")
   const safeDelim = delimiter.replace(/'/g, "''")
 
   return new Promise((resolve, reject) => {
     conn.run(
-      `COPY (${sql}) TO '${safe}' (FORMAT CSV, HEADER true, DELIMITER '${safeDelim}')`,
+      `COPY (${sql}) TO '${safe}' (FORMAT CSV, HEADER ${includeHeader ? 'true' : 'false'}, DELIMITER '${safeDelim}')`,
       (copyErr) => {
         if (copyErr) return reject(new Error(copyErr.message))
         conn.all(`SELECT COUNT(*) AS cnt FROM (${sql}) __c`, (countErr, rows) => {
@@ -131,6 +149,17 @@ ipcMain.handle('csv:export', async (_, { sql, delimiter = ',' }: { sql: string; 
       }
     )
   })
+})
+
+// Pick a CSV output path without executing an export
+ipcMain.handle('csv:pick-path', async (_, { defaultPath }: { defaultPath?: string }): Promise<string | null> => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Choose CSV Output File',
+    defaultPath: defaultPath?.trim() || 'output.csv',
+    filters: [{ name: 'CSV File', extensions: ['csv'] }],
+  })
+  if (canceled || !filePath) return null
+  return filePath
 })
 
 // Save the current pipeline to a .pipes JSON file
@@ -154,7 +183,7 @@ ipcMain.handle('project:saveToPath', async (_, { path, data }: { path: string; d
 })
 
 // Load a pipeline from a .pipes JSON file
-ipcMain.handle('project:load', async (): Promise<string | null> => {
+ipcMain.handle('project:load', async (): Promise<{ path: string; data: string } | null> => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     title: 'Open Pipeline',
     filters: [
@@ -163,7 +192,9 @@ ipcMain.handle('project:load', async (): Promise<string | null> => {
     ]
   })
   if (canceled || !filePaths[0]) return null
-  return fs.readFile(filePaths[0], 'utf-8')
+  const path = filePaths[0]
+  const data = await fs.readFile(path, 'utf-8')
+  return { path, data }
 })
 
 // ─── PostgreSQL handlers ──────────────────────────────────────────────────────
@@ -307,6 +338,39 @@ ipcMain.handle('pg:describe-table', async (_, config: PgConfig, schema: string, 
 // Delete a cached CSV file
 ipcMain.handle('pg:clear-cache', async (_, csvPath: string): Promise<void> => {
   try { await fs.unlink(csvPath) } catch { /* already gone */ }
+})
+
+// Materialize a SQL query to a temp Parquet file and return its path + columns
+ipcMain.handle('materialize:run', async (_, { sql, existingPath }: { sql: string; existingPath?: string }): Promise<{ parquetPath: string; columns: ColumnInfo[] }> => {
+  // Delete old file if re-materializing
+  if (existingPath) {
+    try { await fs.unlink(existingPath) } catch { /* already gone */ }
+  }
+
+  const tmpDir = join(app.getPath('temp'), 'pipelines-materialize')
+  if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true })
+  const parquetPath = join(tmpDir, 'mat-' + Date.now() + '.parquet')
+  const safePath = parquetPath.replace(/'/g, "''")
+
+  await new Promise<void>((resolve, reject) => {
+    conn.run(`COPY (${sql}) TO '${safePath}' (FORMAT PARQUET)`, (err) => {
+      if (err) reject(new Error(err.message))
+      else resolve()
+    })
+  })
+
+  // Sniff the column schema from the written parquet
+  const columns: ColumnInfo[] = await new Promise((resolve, reject) => {
+    conn.run(`CREATE OR REPLACE VIEW __mat_sniff AS SELECT * FROM read_parquet('${safePath}') LIMIT 0`, (err) => {
+      if (err) return reject(new Error(err.message))
+      conn.all('DESCRIBE __mat_sniff', (descErr, rows) => {
+        if (descErr) return reject(new Error(descErr.message))
+        resolve((rows as DescribeRow[]).map((r) => ({ name: r.column_name, type: normalizeType(r.column_type) })))
+      })
+    })
+  })
+
+  return { parquetPath, columns }
 })
 
 // Execute DuckDB SQL → insert into PG table

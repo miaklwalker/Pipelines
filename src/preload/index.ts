@@ -8,17 +8,24 @@ export type PgConfig        = { host: string; port: number; database: string; us
 export type PgFetchResult   = { csvPath: string; columns: ColumnInfo[]; rowCount: number; fromCache?: boolean; cacheDate?: string }
 export type PgWriteResult   = { rowCount: number }
 export type TableEntry      = { schema: string; name: string }
+export type MaterializeResult = { parquetPath: string; columns: ColumnInfo[] }
+export type ProjectLoadResult = { path: string; data: string }
 
 const api = {
   // CSV
   selectCSV: (): Promise<CSVSelectResult | null> => ipcRenderer.invoke('csv:select'),
-  exportCSV: (sql: string, delimiter?: string): Promise<ExportResult | null> => ipcRenderer.invoke('csv:export', { sql, delimiter }),
+  exportCSV: (sql: string, delimiter?: string, includeHeader?: boolean, defaultPath?: string, skipDialogIfDefaultPath?: boolean): Promise<ExportResult | null> =>
+    ipcRenderer.invoke('csv:export', { sql, delimiter, includeHeader, defaultPath, skipDialogIfDefaultPath }),
+  pickCSVPath: (defaultPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('csv:pick-path', { defaultPath }),
   // DuckDB preview
   dbPreview: (sql: string): Promise<PreviewResult> => ipcRenderer.invoke('db:preview', { sql }),
+  // Materialize
+  materializeRun: (sql: string, existingPath?: string): Promise<MaterializeResult> => ipcRenderer.invoke('materialize:run', { sql, existingPath }),
   // Project
   saveProject: (data: string): Promise<string | null> => ipcRenderer.invoke('project:save', { data }),
   saveToPath: (path: string, data: string): Promise<void> => ipcRenderer.invoke('project:saveToPath', { path, data }),
-  loadProject: (): Promise<string | null> => ipcRenderer.invoke('project:load'),
+  loadProject: (): Promise<ProjectLoadResult | null> => ipcRenderer.invoke('project:load'),
   // PostgreSQL
   pgTest: (config: PgConfig): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('pg:test', config),
   pgFetch: (config: PgConfig, query: string): Promise<PgFetchResult> => ipcRenderer.invoke('pg:fetch', config, query),

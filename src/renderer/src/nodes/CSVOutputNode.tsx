@@ -25,6 +25,7 @@ type DelimiterKey = (typeof DELIMITER_OPTIONS)[number]['value']
 function CSVOutputNode({ id, data, selected }: Props) {
   const { getNodes, getEdges, setNodes } = useReactFlow()
   const { outputPath, includeHeader = true, inputColumns = [], lastExport, delimiter = 'comma' } = data
+  const displayName = outputPath.split(/[/\\]/).pop() || outputPath
 
   const [status,   setStatus]   = useState<ExportStatus>('idle')
   const [errorMsg, setErrorMsg] = useState('')
@@ -51,7 +52,7 @@ function CSVOutputNode({ id, data, selected }: Props) {
 
     try {
       const delimChar = DELIMITER_OPTIONS.find((d) => d.value === delimiter)?.char ?? ','
-      const result = await window.api.exportCSV(sql, delimChar)
+      const result = await window.api.exportCSV(sql, delimChar, includeHeader, outputPath || undefined)
       if (!result) { setStatus('idle'); return }
       update({
         outputPath: result.filePath,
@@ -63,12 +64,19 @@ function CSVOutputNode({ id, data, selected }: Props) {
       setErrorMsg(err instanceof Error ? err.message : String(err))
       setStatus('error')
     }
-  }, [id, delimiter, getNodes, getEdges, update])
+  }, [id, delimiter, includeHeader, outputPath, getNodes, getEdges, update])
+
+  const handleChoosePath = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const chosen = await window.api.pickCSVPath(outputPath || undefined)
+    if (!chosen) return
+    update({ outputPath: chosen })
+  }, [outputPath, update])
 
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
   const subtitle = outputPath
-    ? outputPath.split('/').pop()!
+    ? displayName
     : hasInput ? 'Ready to export' : 'No input connected'
 
   // Status-driven export button appearance
@@ -129,6 +137,27 @@ function CSVOutputNode({ id, data, selected }: Props) {
         {/* Advanced panel */}
         {advOpen && (
           <div className="advanced-panel">
+            <div className="node-body-row">
+              <span className="node-label">File</span>
+              <div style={{ display: 'flex', gap: 6, width: '100%' }}>
+                <input
+                  className="node-input"
+                  value={outputPath}
+                  placeholder="output.csv"
+                  onChange={(e) => update({ outputPath: e.target.value })}
+                  onClick={stopProp} onMouseDown={stopProp}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  className="node-btn"
+                  onClick={handleChoosePath}
+                  onMouseDown={stopProp}
+                  style={{ padding: '0 8px', fontSize: 10 }}
+                >
+                  Choose
+                </button>
+              </div>
+            </div>
             <div className="node-body-row">
               <span className="node-label">Delimiter</span>
               <select

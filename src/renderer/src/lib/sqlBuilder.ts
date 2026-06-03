@@ -6,6 +6,7 @@ import type {
   SortNodeData, LimitNodeData, AggregateNodeData,
   ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
   BrowseSchemaNodeData, JoinColSelection,
+  MaterializeNodeData,
   ColumnInfo,
 } from './types'
 
@@ -61,6 +62,32 @@ function emitterExpression(nodeId: string, nodes: AppNode[]): string | null {
   return null
 }
 
+function findDestinationColumnInputEdge(
+  nodeId: string,
+  destCol: string,
+  edges: AppEdge[]
+): AppEdge | undefined {
+  return edges.find(
+    (e) => e.target === nodeId && (
+      e.targetHandle === `col-in-custom-${destCol}`
+      || e.targetHandle === `col-in-${destCol}`
+    )
+  )
+}
+
+function isDestinationColumnTargetHandle(handle: string | null | undefined): boolean {
+  if (!handle) return false
+  return handle.startsWith('col-in-custom-') || handle.startsWith('col-in-')
+}
+
+function sourceColumnFromColOutHandle(handle: string | null | undefined): string | null {
+  if (!handle) return null
+  if (handle.startsWith('col-out-pass-')) return handle.slice('col-out-pass-'.length)
+  if (handle.startsWith('col-out-fail-')) return handle.slice('col-out-fail-'.length)
+  if (handle.startsWith('col-out-')) return handle.slice('col-out-'.length)
+  return null
+}
+
 /**
  * Build the SELECT clause for a Join node, respecting any column selection.
  * Falls back to `__l.*, __r."x" AS "r_x"` when no selection is defined.
@@ -69,15 +96,20 @@ function buildJoinSelect(d: JoinNodeData): string {
   const sel = (d.columnSelection ?? []).filter((s) => s.included)
 
   if (sel.length > 0) {
-    const parts = sel.map((s: JoinColSelection) => {
-      const tbl = s.side === 'left' ? '__l' : '__r'
-      // Only emit alias if it differs from the bare column name
-      const needsAlias = s.alias && s.alias !== s.name
-      return needsAlias
-        ? `${tbl}."${s.name}" AS "${s.alias}"`
-        : `${tbl}."${s.name}"`
-    })
-    return parts.join(', ')
+    const leftColSet  = new Set((d.leftColumns  ?? []).map((c) => c.name))
+    const rightColSet = new Set((d.rightColumns ?? []).map((c) => c.name))
+    const parts = sel
+      // Skip stale entries whose source column no longer exists in the schema
+      .filter((s) => (s.side === 'left' ? leftColSet : rightColSet).has(s.name))
+      .map((s: JoinColSelection) => {
+        const tbl = s.side === 'left' ? '__l' : '__r'
+        // Only emit alias if it differs from the bare column name
+        const needsAlias = s.alias && s.alias !== s.name
+        return needsAlias
+          ? `${tbl}."${s.name}" AS "${s.alias}"`
+          : `${tbl}."${s.name}"`
+      })
+    if (parts.length) return parts.join(', ')
   }
 
   // Default: left.*, right cols with r_ prefix
@@ -100,14 +132,20 @@ function buildJoinSelectAll(d: JoinNodeData): string {
   const sel = d.columnSelection ?? []
 
   if (sel.length > 0) {
-    // Left columns: use raw names (same as handles)
-    const leftParts = (d.leftColumns ?? []).map((c) => `__l."${c.name}"`)
-    // Right columns: use alias if set, otherwise r_{name} — matching the handle names
-    const rightParts = (d.rightColumns ?? []).map((c) => {
+    // Build right parts first so we know which aliases shadow left column names.
+    const rightAliases = new Set<string>()
+    const rightParts: string[] = []
+    for (const c of (d.rightColumns ?? [])) {
       const entry = sel.find((s) => s.name === c.name && s.side === 'right')
       const alias = entry?.alias || `r_${c.name}`
-      return `__r."${c.name}" AS "${alias}"`
-    })
+      rightAliases.add(alias)
+      rightParts.push(`__r."${c.name}" AS "${alias}"`)
+    }
+    // Left columns: exclude any whose name is already taken by a right alias so
+    // we never emit duplicate column names into the anchor subquery.
+    const leftParts = (d.leftColumns ?? [])
+      .filter((c) => !rightAliases.has(c.name))
+      .map((c) => `__l."${c.name}"`)
     return [...leftParts, ...rightParts].join(', ') || '__l.*, __r.*'
   }
 
@@ -185,34 +223,225 @@ export function buildNodeSQL(
     case 'destination': {
       const d = node.data as DestinationNodeData
       const included = (d.colMap ?? []).filter(m => m.included !== false)
-      if (!included.length) return null
+      const rowInputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+
+      const destinationColEdges = edges.filter(
+        (e) => e.target === nodeId && isDestinationColumnTargetHandle(e.targetHandle)
+      )
+
+      const exactEdgeByDest = new Map<string, AppEdge>()
+      const exactEdgeIds = new Set<string>()
+      for (const m of included) {
+        if (!m.destCol) continue
+        const exact = findDestinationColumnInputEdge(nodeId, m.destCol, destinationColEdges)
+        if (exact) {
+          exactEdgeByDest.set(m.destCol, exact)
+          exactEdgeIds.add(exact.id)
+        }
+      }
+
+      const orphanColEdges = destinationColEdges.filter((e) => !exactEdgeIds.has(e.id))
+      const unresolvedDestCols = included
+        .filter((m) => m.destCol)
+        .filter((m) => {
+          const expr = m.customExpr?.trim()
+          return !exactEdgeByDest.has(m.destCol!) && !m.sourceCol && !expr
+        })
+        .map((m) => m.destCol!)
+
+      // Conservative recovery for stale edge target handles after a destination column rename.
+      // Only auto-attach when it's unambiguous: one orphan col-edge and one unresolved destination col.
+      const fallbackEdgeByDest = new Map<string, AppEdge>()
+
+      // Prefer deterministic fallback: match mapping.sourceCol to orphan edge sourceHandle column.
+      // This works even when there are multiple unresolved destination columns.
+      const usedOrphanEdgeIds = new Set<string>()
+      for (const m of included) {
+        if (!m.destCol || !m.sourceCol || exactEdgeByDest.has(m.destCol)) continue
+        const matchingOrphan = orphanColEdges.find(
+          (e) => !usedOrphanEdgeIds.has(e.id) && sourceColumnFromColOutHandle(e.sourceHandle) === m.sourceCol
+        )
+        if (matchingOrphan) {
+          fallbackEdgeByDest.set(m.destCol, matchingOrphan)
+          usedOrphanEdgeIds.add(matchingOrphan.id)
+        }
+      }
+
+      if (orphanColEdges.length === 1 && unresolvedDestCols.length === 1) {
+        const onlyDest = unresolvedDestCols[0]
+        if (!fallbackEdgeByDest.has(onlyDest)) {
+          fallbackEdgeByDest.set(onlyDest, orphanColEdges[0])
+        }
+      }
+
+      if (orphanColEdges.length === 1 && unresolvedDestCols.length > 1 && !usedOrphanEdgeIds.has(orphanColEdges[0].id)) {
+        const orphanSourceCol = sourceColumnFromColOutHandle(orphanColEdges[0].sourceHandle) ?? ''
+        const preferred = unresolvedDestCols.find((dest) => {
+          const d = dest.toLowerCase()
+          const s = orphanSourceCol.toLowerCase()
+          return d.endsWith('_by') && (s === 'id' || s.endsWith('_id') || s.endsWith('id'))
+        })
+        const chosen = preferred ?? unresolvedDestCols[0]
+        if (chosen && !fallbackEdgeByDest.has(chosen)) {
+          fallbackEdgeByDest.set(chosen, orphanColEdges[0])
+          usedOrphanEdgeIds.add(orphanColEdges[0].id)
+        }
+      }
+
+      const resolveDestinationColInputEdge = (destCol: string): AppEdge | undefined =>
+        exactEdgeByDest.get(destCol) || fallbackEdgeByDest.get(destCol)
+
+      const resolveSourceColumnFromAnchor = (
+        anchorId: string,
+        anchorOutputNames: Set<string>,
+        colInEdge: AppEdge
+      ): string | null => {
+        const srcHandle = colInEdge.sourceHandle ?? ''
+        if (!srcHandle.startsWith('col-out-')) return null
+
+        const srcCol = srcHandle.replace(/^col-out-(?:pass-|fail-)?/, '')
+
+        // Same node as anchor: handle name should match output name.
+        if (colInEdge.source === anchorId) {
+          return anchorOutputNames.has(srcCol) ? srcCol : null
+        }
+
+        // If anchor is a join and the source is one of its inputs, translate right-side
+        // columns to their join output alias (default: r_{name}).
+        const anchorNode = nodes.find((n) => n.id === anchorId)
+        if (anchorNode?.type === 'join') {
+          const jd = anchorNode.data as JoinNodeData
+          const leftEdge  = edges.find((e) => e.target === anchorId && e.targetHandle === 'row-left')
+          const rightEdge = edges.find((e) => e.target === anchorId && e.targetHandle === 'row-right')
+
+          if (leftEdge?.source === colInEdge.source) {
+            return anchorOutputNames.has(srcCol) ? srcCol : null
+          }
+
+          if (rightEdge?.source === colInEdge.source) {
+            const sel = jd.columnSelection ?? []
+            const entry = sel.find((s) => s.name === srcCol && s.side === 'right')
+            const rightName = entry?.alias || `r_${srcCol}`
+            return anchorOutputNames.has(rightName) ? rightName : null
+          }
+        }
+
+        // Unrelated source: only valid if anchor already exposes that exact name.
+        return anchorOutputNames.has(srcCol) ? srcCol : null
+      }
+
+      if (!included.length) {
+        if (!rowInputEdge) return null
+        return buildNodeSQL(rowInputEdge.source, nodes, edges, rowInputEdge.sourceHandle ?? undefined)
+      }
 
       // Find an anchor row source — either through an emitter's anchor-in, or directly from
       // a data node wired to a col-in handle (e.g. read-table col-out-{name})
       let anchorSQL: string | null = null
       let anchorNodeId: string | null = null
+
+      // Gather candidate anchors from all wired destination inputs.
+      // This works for destination nodes that are column-only (no row-in by design).
+      const candidateAnchorIds = new Set<string>()
+      if (rowInputEdge) candidateAnchorIds.add(rowInputEdge.source)
+
+      // Include all wired destination column edges as candidates, even when target handles
+      // are stale and don't resolve to a current destCol mapping.
+      for (const e of destinationColEdges) {
+        const srcHandle = e.sourceHandle ?? ''
+        if (srcHandle.startsWith('col-out-')) {
+          candidateAnchorIds.add(e.source)
+          continue
+        }
+        const emitterAnchor = edges.find((ax) => ax.target === e.source && ax.targetHandle === 'anchor-in')
+        if (emitterAnchor) candidateAnchorIds.add(emitterAnchor.source)
+      }
+
       for (const m of included) {
         if (!m.destCol) continue
-        const colInEdge = edges.find(e => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`)
+        const colInEdge = resolveDestinationColInputEdge(m.destCol)
         if (!colInEdge) continue
-        // Path 1: emitter anchored to a row source
-        const anchorEdge = edges.find(e => e.target === colInEdge.source && e.targetHandle === 'anchor-in')
-        if (anchorEdge) {
-          anchorSQL = buildNodeSQL(anchorEdge.source, nodes, edges, anchorEdge.sourceHandle ?? undefined)
-          if (anchorSQL) { anchorNodeId = anchorEdge.source; break }
-        }
-        // Path 2: data node connected directly via col-out — use that node's full row output.
-        // Pass allColumns:true so join nodes expose every underlying column via handle-matching names.
         const srcHandle = colInEdge.sourceHandle ?? ''
         if (srcHandle.startsWith('col-out-')) {
-          anchorSQL = buildNodeSQL(colInEdge.source, nodes, edges, undefined, { allColumns: true })
-          if (anchorSQL) { anchorNodeId = colInEdge.source; break }
+          candidateAnchorIds.add(colInEdge.source)
+          continue
+        }
+        const emitterAnchor = edges.find((e) => e.target === colInEdge.source && e.targetHandle === 'anchor-in')
+        if (emitterAnchor) candidateAnchorIds.add(emitterAnchor.source)
+      }
+
+      // Only count mappings that truly depend on an anchor column.
+      const anchorRequired = included.filter((m) => {
+        if (!m.destCol) return false
+        const colInEdge = resolveDestinationColInputEdge(m.destCol)
+        if (colInEdge) {
+          const expr = emitterExpression(colInEdge.source, nodes)
+          if (expr !== null) return false
+          const srcHandle = colInEdge.sourceHandle ?? ''
+          return srcHandle.startsWith('col-out-')
+        }
+        return !!m.sourceCol
+      }).length
+
+      let bestScore = -1
+      let bestWidth = -1
+      const evaluatedCandidateIds = new Set<string>()
+
+      const evaluateCandidate = (candidateId: string) => {
+        if (evaluatedCandidateIds.has(candidateId) || candidateId === nodeId) return
+        evaluatedCandidateIds.add(candidateId)
+
+        const candidateSQL = buildNodeSQL(candidateId, nodes, edges, undefined, { allColumns: true })
+        if (!candidateSQL) return
+        const candidateOutputs = new Set(getNodeOutputColumns(candidateId, nodes, edges).map((c) => c.name))
+
+        let score = 0
+        for (const m of included) {
+          if (!m.destCol) continue
+          const colInEdge = resolveDestinationColInputEdge(m.destCol)
+          if (colInEdge) {
+            const expr = emitterExpression(colInEdge.source, nodes)
+            if (expr !== null) { score += 1; continue }
+            if (resolveSourceColumnFromAnchor(candidateId, candidateOutputs, colInEdge)) {
+              score += 1
+              continue
+            }
+          }
+          if (m.sourceCol && candidateOutputs.has(m.sourceCol)) {
+            score += 1
+          }
+        }
+
+        const width = candidateOutputs.size
+        if (score > bestScore || (score === bestScore && width > bestWidth)) {
+          bestScore = score
+          bestWidth = width
+          anchorNodeId = candidateId
+          anchorSQL = candidateSQL
         }
       }
 
+      for (const candidateId of candidateAnchorIds) {
+        evaluateCandidate(candidateId)
+      }
+
+      // If wiring-based candidates cannot satisfy all anchor-dependent mappings,
+      // broaden the search to other nodes in this graph segment (e.g. downstream join).
+      if (anchorRequired > 0 && bestScore < anchorRequired) {
+        for (const candidate of nodes) {
+          evaluateCandidate(candidate.id)
+        }
+      }
+
+      const anchorOutputNames = new Set(
+        anchorNodeId
+          ? getNodeOutputColumns(anchorNodeId, nodes, edges).map((c) => c.name)
+          : []
+      )
+
       const cols = included.flatMap((m) => {
         if (!m.destCol) return []
-        const colInEdge = edges.find(e => e.target === nodeId && e.targetHandle === `col-in-custom-${m.destCol}`)
+        const colInEdge = resolveDestinationColInputEdge(m.destCol)
         if (colInEdge) {
           // Emitter: use its scalar expression
           const expr = emitterExpression(colInEdge.source, nodes)
@@ -220,46 +449,24 @@ export function buildNodeSQL(
 
           const srcHandle = colInEdge.sourceHandle ?? ''
           if (srcHandle.startsWith('col-out-') && anchorSQL) {
-            const srcCol = srcHandle.replace(/^col-out-(?:pass-|fail-)?/, '')
+            const resolvedName = anchorNodeId
+              ? resolveSourceColumnFromAnchor(anchorNodeId, anchorOutputNames, colInEdge)
+              : null
 
-            // Same node as anchor — handle names already match anchor output.
-            if (colInEdge.source === anchorNodeId) {
-              return [`"${srcCol}" AS "${m.destCol}"`]
+            if (resolvedName) {
+              return [`"${resolvedName}" AS "${m.destCol}"`]
             }
-
-            // Different node — check if it's an input to the anchor join,
-            // so we can resolve the column name in the join's output.
-            const anchorNode = anchorNodeId ? nodes.find(n => n.id === anchorNodeId) : null
-            if (anchorNode?.type === 'join') {
-              const jd = anchorNode.data as JoinNodeData
-              const leftEdge  = edges.find(e => e.target === anchorNodeId && e.targetHandle === 'row-left')
-              const rightEdge = edges.find(e => e.target === anchorNodeId && e.targetHandle === 'row-right')
-              if (leftEdge?.source === colInEdge.source) {
-                // Source is the join's left input → column available by its original name
-                return [`"${srcCol}" AS "${m.destCol}"`]
-              }
-              if (rightEdge?.source === colInEdge.source) {
-                // Source is the join's right input → resolve to the name used in anchor output
-                const sel = jd.columnSelection ?? []
-                const entry = sel.find(s => s.name === srcCol && s.side === 'right')
-                const resolvedName = entry?.alias || `r_${srcCol}`
-                return [`"${resolvedName}" AS "${m.destCol}"`]
-              }
-            }
-
-            // Unrelated node — reference as-is and hope the anchor exposes it
-            return [`"${srcCol}" AS "${m.destCol}"`]
           }
         }
         // Old pass-through entry (sourceCol set, no col-in wired): reference the
         // upstream column by name if we have an anchor to read it from.
-        if (m.sourceCol && anchorSQL) {
+        if (m.sourceCol && anchorSQL && anchorOutputNames.has(m.sourceCol)) {
           const destName = m.destCol || m.sourceCol
           return [`"${m.sourceCol}" AS "${destName}"`]
         }
         // Fall back to typed SQL expression
         const expr = m.customExpr?.trim()
-        if (!expr) return []
+        if (!expr) return [`NULL AS "${m.destCol}"`]
         return [`(${expr}) AS "${m.destCol}"`]
       })
       if (!cols.length) return null
@@ -282,6 +489,22 @@ export function buildNodeSQL(
       const rightSQL = buildNodeSQL(rightEdge.source, nodes, edges, rightEdge.sourceHandle ?? undefined)
       if (!leftSQL || !rightSQL) return null
       return `SELECT * FROM (${leftSQL}) UNION ALL SELECT * FROM (${rightSQL})`
+    }
+
+    case 'concat': {
+      const leftEdge  = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-left')
+      const rightEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-right')
+      if (!leftEdge || !rightEdge) return null
+      const leftSQL  = buildNodeSQL(leftEdge.source, nodes, edges, leftEdge.sourceHandle ?? undefined)
+      const rightSQL = buildNodeSQL(rightEdge.source, nodes, edges, rightEdge.sourceHandle ?? undefined)
+      if (!leftSQL || !rightSQL) return null
+      return `SELECT * FROM (${leftSQL}) UNION ALL SELECT * FROM (${rightSQL})`
+    }
+
+    case 'materialize': {
+      const d = node.data as MaterializeNodeData
+      if (!d.parquetPath) return null
+      return `SELECT * FROM read_parquet('${escapePath(d.parquetPath)}')`
     }
 
     case 'filter': {
@@ -484,11 +707,16 @@ export function getNodeOutputColumns(
       const d = node.data as JoinNodeData
       const sel = (d.columnSelection ?? []).filter((s) => s.included)
       if (sel.length > 0) {
-        return sel.map((s) => {
-          const src = (s.side === 'left' ? d.leftColumns : d.rightColumns) ?? []
-          const orig = src.find((c) => c.name === s.name)
-          return { name: s.alias || s.name, type: orig?.type ?? 'TEXT' }
-        })
+        const leftColSet  = new Set((d.leftColumns  ?? []).map((c) => c.name))
+        const rightColSet = new Set((d.rightColumns ?? []).map((c) => c.name))
+        return sel
+          // Drop stale entries whose source column no longer exists
+          .filter((s) => (s.side === 'left' ? leftColSet : rightColSet).has(s.name))
+          .map((s) => {
+            const src = (s.side === 'left' ? d.leftColumns : d.rightColumns) ?? []
+            const orig = src.find((c) => c.name === s.name)
+            return { name: s.alias || s.name, type: orig?.type ?? 'TEXT' }
+          })
       }
       // Default: all left + all right with r_ prefix
       const leftCols  = d.leftColumns ?? []
@@ -515,7 +743,13 @@ export function getNodeOutputColumns(
     case 'csv-output':
       return (node.data as CSVOutputNodeData).inputColumns ?? []
 
+    case 'materialize':
+      return (node.data as MaterializeNodeData).columns ?? []
+
     case 'merge':
+      return (node.data as MergeNodeData).inputColumns ?? []
+
+    case 'concat':
       return (node.data as MergeNodeData).inputColumns ?? []
 
     case 'filter':
