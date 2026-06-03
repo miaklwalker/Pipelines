@@ -1,6 +1,6 @@
 import type {
   AppNode, AppEdge,
-  CSVNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
+  CSVNodeData, JSONNodeData, UnnestNodeData, JsonExtractNodeData, JsonExtractField, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
   UniqueNodeData, MapValueData, ConditionalOutputData,
   SortNodeData, LimitNodeData, AggregateNodeData,
@@ -179,6 +179,67 @@ export function buildNodeSQL(
       const d = node.data as CSVNodeData
       if (!d.filePath) return null
       return `SELECT * FROM read_csv_auto('${escapePath(d.filePath)}')`
+    }
+
+    case 'json-input': {
+      const d = node.data as JSONNodeData
+      if (!d.filePath) return null
+      return `SELECT * FROM read_json_auto('${escapePath(d.filePath)}', format='array')`
+    }
+
+    case 'json-extract': {
+      const d = node.data as JsonExtractNodeData
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      if (!inputEdge) return null
+      const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+      if (!inputSQL) return null
+
+      const sourceColumn = d.sourceColumn?.trim()
+      const fields = (d.fields ?? []).filter((f: JsonExtractField) => f.alias?.trim() && f.path?.trim())
+      if (!sourceColumn || !fields.length) return `SELECT * FROM (${inputSQL}) __j`
+
+      const normalizePath = (path: string) => {
+        const trimmed = path.trim()
+        return trimmed.startsWith('$') ? trimmed : `$.${trimmed.replace(/^\.?/, '')}`
+      }
+
+      const extractExpr = (field: JsonExtractField) => {
+        const path = normalizePath(field.path)
+        switch (field.type) {
+          case 'TEXT':
+            return `json_extract_string("${sourceColumn}", '${path}')`
+          case 'INTEGER':
+            return `CAST(json_extract("${sourceColumn}", '${path}') AS BIGINT)`
+          case 'DOUBLE':
+            return `CAST(json_extract("${sourceColumn}", '${path}') AS DOUBLE)`
+          case 'BOOLEAN':
+            return `CAST(json_extract("${sourceColumn}", '${path}') AS BOOLEAN)`
+          case 'JSON':
+            return `json_extract("${sourceColumn}", '${path}')`
+        }
+      }
+
+      const selectParts = fields.map((field: JsonExtractField) => `${extractExpr(field)} AS "${field.alias}"`)
+      return d.keepAll
+        ? `SELECT *, ${selectParts.join(', ')} FROM (${inputSQL}) __j`
+        : `SELECT ${selectParts.join(', ')} FROM (${inputSQL}) __j`
+    }
+
+    case 'unnest': {
+      const d = node.data as UnnestNodeData
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      if (!inputEdge) return null
+      const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+      if (!inputSQL) return null
+      if (!d.arrayColumn?.trim()) return `SELECT * FROM (${inputSQL}) __u`
+      const arrayCol = d.arrayColumn.trim()
+      const itemCol = d.itemColumn?.trim() || 'item'
+      return (
+        `SELECT __u.* EXCLUDE ("${arrayCol}"), ` +
+        `to_json(item) AS "${itemCol}" ` +
+        `FROM (${inputSQL}) __u ` +
+        `CROSS JOIN UNNEST(__u."${arrayCol}") AS __items(item)`
+      )
     }
 
     case 'join': {
@@ -725,6 +786,30 @@ export function getNodeOutputColumns(
   switch (node.type) {
     case 'csv-input':
       return (node.data as CSVNodeData).columns
+
+    case 'json-input':
+      return (node.data as JSONNodeData).columns
+
+    case 'json-extract': {
+      const d = node.data as JsonExtractNodeData
+      const inputCols = d.inputColumns ?? []
+      const fields = (d.fields ?? [])
+        .filter((f: JsonExtractField) => f.alias?.trim())
+        .map((f: JsonExtractField) => ({ name: f.alias, type: (f.type || 'TEXT') as string }))
+      return d.keepAll ? [...inputCols, ...fields] : fields
+    }
+
+    case 'unnest': {
+      const d = node.data as UnnestNodeData
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
+      if (!inputCols.length) return []
+      const itemName = d.itemColumn?.trim() || 'item'
+      const filtered = d.arrayColumn?.trim()
+        ? inputCols.filter((c) => c.name !== d.arrayColumn.trim())
+        : inputCols
+      return [...filtered, { name: itemName, type: 'TEXT' }]
+    }
 
     case 'join': {
       const d = node.data as JoinNodeData

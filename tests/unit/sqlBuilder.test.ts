@@ -48,6 +48,166 @@ describe('csv-input', () => {
   })
 })
 
+describe('json-input', () => {
+  it('generates read_json_auto for a valid file', () => {
+    const n: AppNode = {
+      id: 'n1', type: 'json-input', position: pos,
+      data: { fileName: 'data.json', filePath: '/data/data.json', columns: [] },
+    } as AppNode
+    const sql = buildNodeSQL('n1', [n], [])
+    expect(sql).toContain("read_json_auto('/data/data.json', format='array')")
+  })
+
+  it('returns null when filePath is empty', () => {
+    const n: AppNode = {
+      id: 'n1', type: 'json-input', position: pos,
+      data: { fileName: 'data.json', filePath: '', columns: [] },
+    } as AppNode
+    expect(buildNodeSQL('n1', [n], [])).toBeNull()
+  })
+})
+
+describe('unnest', () => {
+  const src: AppNode = {
+    id: 'n1', type: 'json-input', position: pos,
+    data: {
+      fileName: 'data.json', filePath: '/data/data.json',
+      columns: [
+        { name: 'id', type: 'INTEGER' },
+        { name: 'line_items', type: 'JSON' },
+      ],
+    },
+  } as AppNode
+
+  it('generates CROSS JOIN UNNEST for an array column', () => {
+    const node: AppNode = {
+      id: 'n2', type: 'unnest', position: pos,
+      data: { arrayColumn: 'line_items', itemColumn: 'item', inputColumns: src.data.columns },
+    } as AppNode
+    const sql = buildNodeSQL('n2', [src, node], [edge('e1', 'n1', 'n2')])
+    expect(sql).toContain('CROSS JOIN UNNEST')
+    expect(sql).toContain('to_json(item) AS "item"')
+    expect(sql).toContain('EXCLUDE ("line_items")')
+  })
+
+  it('returns input unchanged when no array column is selected', () => {
+    const node: AppNode = {
+      id: 'n2', type: 'unnest', position: pos,
+      data: { arrayColumn: '', itemColumn: 'item', inputColumns: src.data.columns },
+    } as AppNode
+    const sql = buildNodeSQL('n2', [src, node], [edge('e1', 'n1', 'n2')])
+    expect(sql).toContain('SELECT * FROM')
+  })
+})
+
+describe('json-extract', () => {
+  const src: AppNode = {
+    id: 'n0', type: 'json-input', position: pos,
+    data: {
+      fileName: 'data.json', filePath: '/data/data.json',
+      columns: [
+        { name: 'id', type: 'INTEGER' },
+        { name: 'line_items', type: 'JSON' },
+        { name: 'status', type: 'TEXT' },
+      ],
+    },
+  } as AppNode
+
+  const unnest: AppNode = {
+    id: 'n1', type: 'unnest', position: pos,
+    data: {
+      arrayColumn: 'line_items',
+      itemColumn: 'item',
+      inputColumns: src.data.columns,
+    },
+  } as AppNode
+
+  it('generates JSON extraction expressions', () => {
+    const node: AppNode = {
+      id: 'n2', type: 'json-extract', position: pos,
+      data: {
+        sourceColumn: 'item',
+        keepAll: true,
+        inputColumns: src.data.inputColumns,
+        fields: [
+          { id: 'f1', path: 'sku', alias: 'sku', type: 'TEXT' },
+          { id: 'f2', path: '$.qty', alias: 'qty', type: 'INTEGER' },
+        ],
+      },
+    } as AppNode
+    const sql = buildNodeSQL('n2', [src, unnest, node], [edge('e1', 'n0', 'n1'), edge('e2', 'n1', 'n2')])
+    expect(sql).toContain('json_extract_string("item", \'$.sku\') AS "sku"')
+    expect(sql).toContain('CAST(json_extract("item", \'$.qty\') AS BIGINT) AS "qty"')
+    expect(sql).toContain('SELECT *,')
+  })
+
+  it('returns a pass-through when no fields are configured', () => {
+    const node: AppNode = {
+      id: 'n2', type: 'json-extract', position: pos,
+      data: {
+        sourceColumn: 'item',
+        keepAll: true,
+        inputColumns: src.data.inputColumns,
+        fields: [],
+      },
+    } as AppNode
+    const sql = buildNodeSQL('n2', [src, unnest, node], [edge('e1', 'n0', 'n1'), edge('e2', 'n1', 'n2')])
+    expect(sql).toContain('SELECT * FROM')
+  })
+})
+
+describe('getNodeOutputColumns – json-extract', () => {
+  it('adds extracted fields to the output schema', () => {
+    const node: AppNode = {
+      id: 'n2', type: 'json-extract', position: pos,
+      data: {
+        sourceColumn: 'item',
+        keepAll: true,
+        inputColumns: [
+          { name: 'id', type: 'INTEGER' },
+          { name: 'item', type: 'TEXT' },
+        ],
+        fields: [
+          { id: 'f1', path: 'sku', alias: 'sku', type: 'TEXT' },
+          { id: 'f2', path: 'qty', alias: 'qty', type: 'INTEGER' },
+        ],
+      },
+    } as AppNode
+    const cols = getNodeOutputColumns('n2', [node], [])
+    expect(cols.map((c) => c.name)).toEqual(['id', 'item', 'sku', 'qty'])
+  })
+})
+
+describe('getNodeOutputColumns – unnest', () => {
+  it('drops the source array column and adds the item column', () => {
+    const src: AppNode = {
+      id: 'n1', type: 'json-input', position: pos,
+      data: {
+        fileName: 'data.json', filePath: '/data/data.json',
+        columns: [
+          { name: 'id', type: 'INTEGER' },
+          { name: 'line_items', type: 'JSON' },
+          { name: 'status', type: 'TEXT' },
+        ],
+      },
+    } as AppNode
+    const node: AppNode = {
+      id: 'n2', type: 'unnest', position: pos,
+      data: {
+        arrayColumn: 'line_items',
+        itemColumn: 'item',
+        inputColumns: [
+          { name: 'id', type: 'INTEGER' },
+          { name: 'line_items', type: 'JSON' },
+          { name: 'status', type: 'TEXT' },
+        ],
+      },
+    } as AppNode
+    const cols = getNodeOutputColumns('n2', [src, node], [edge('e1', 'n1', 'n2')])
+    expect(cols.map((c) => c.name)).toEqual(['id', 'status', 'item'])
+  })
+})
+
 // ── getNodeOutputColumns ──────────────────────────────────────────────────────
 
 describe('getNodeOutputColumns – csv-input', () => {
@@ -55,6 +215,17 @@ describe('getNodeOutputColumns – csv-input', () => {
     const n = csvNode('n1', '/f.csv', ['id', 'name', 'amount'])
     const cols = getNodeOutputColumns('n1', [n], [])
     expect(cols.map((c) => c.name)).toEqual(['id', 'name', 'amount'])
+  })
+})
+
+describe('getNodeOutputColumns – json-input', () => {
+  it('returns columns from node data', () => {
+    const n: AppNode = {
+      id: 'n1', type: 'json-input', position: pos,
+      data: { fileName: 'data.json', filePath: '/data/data.json', columns: [{ name: 'id', type: 'INTEGER' }, { name: 'name', type: 'TEXT' }] },
+    } as AppNode
+    const cols = getNodeOutputColumns('n1', [n], [])
+    expect(cols.map((c) => c.name)).toEqual(['id', 'name'])
   })
 })
 

@@ -30,6 +30,34 @@ export interface CSVNodeData extends Record<string, unknown> {
   columns: ColumnInfo[]
 }
 
+export interface JSONNodeData extends Record<string, unknown> {
+  fileName: string
+  filePath: string
+  columns: ColumnInfo[]
+}
+
+export interface UnnestNodeData extends Record<string, unknown> {
+  arrayColumn: string
+  itemColumn: string
+  inputColumns: ColumnInfo[]
+}
+
+export type JsonFieldType = 'TEXT' | 'INTEGER' | 'DOUBLE' | 'BOOLEAN' | 'JSON'
+
+export interface JsonExtractField {
+  id: string
+  path: string
+  alias: string
+  type: JsonFieldType
+}
+
+export interface JsonExtractNodeData extends Record<string, unknown> {
+  sourceColumn: string
+  keepAll: boolean
+  fields: JsonExtractField[]
+  inputColumns: ColumnInfo[]
+}
+
 export interface JoinColSelection {
   side: 'left' | 'right'
   name: string    // original column name in its source table
@@ -161,6 +189,11 @@ export interface ReadTableCachedNodeData extends Record<string, unknown> {
   error?: string
   resolvedConfig?: PgConfig | null
   cacheDate: string | null
+  dbTables?: TableEntry[]
+  dbSelectedSchema?: string | null
+  dbSelectedTable?: string | null
+  dbStatus?: 'idle' | 'browsing' | 'error'
+  dbError?: string
 }
 
 export interface WriteTableNodeData extends Record<string, unknown> {
@@ -247,6 +280,9 @@ export interface BrowseSchemaNodeData extends Record<string, unknown> {
 export type AppNode =
   | Node<MaterializeNodeData,    'materialize'>
   | Node<CSVNodeData,            'csv-input'>
+  | Node<JSONNodeData,           'json-input'>
+  | Node<UnnestNodeData,         'unnest'>
+  | Node<JsonExtractNodeData,    'json-extract'>
   | Node<JoinNodeData,           'join'>
   | Node<TransformNodeData,      'transform'>
   | Node<DestinationNodeData,    'destination'>

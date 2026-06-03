@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { HardDrive, Loader, CheckCircle, AlertCircle, RefreshCw, Trash2 } from 'lucide-react'
 import type { AppNode, ReadTableCachedNodeData } from '../lib/types'
@@ -9,6 +9,11 @@ import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, colHandle, connHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { typeBadgeClass } from './CSVInputNode'
 import { ColumnList } from './shared/columns'
+import SchemaTableBrowser from './shared/SchemaTableBrowser'
+
+function quoteIdent(v: string): string {
+  return `"${v.replace(/"/g, '""')}"`
+}
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ReadTableCachedNodeData }>
 
@@ -18,7 +23,9 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
     readMode = 'table', tableName = '', customSQL = '',
     csvPath = null, columns = [], rowCount = null,
     status = 'idle', error, resolvedConfig, cacheDate = null,
+    dbTables = [], dbSelectedSchema = null, dbSelectedTable = null, dbStatus = 'idle', dbError,
   } = data
+  const [dbFilter, setDbFilter] = useState('')
 
   const update = useCallback(
     (patch: Partial<ReadTableCachedNodeData>) =>
@@ -27,9 +34,26 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
   )
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
-  const query = readMode === 'table'
-    ? (tableName ? `SELECT * FROM "${tableName}"` : '')
-    : customSQL
+  const tableQuery = tableName
+    ? `SELECT * FROM ${dbSelectedSchema ? `${quoteIdent(dbSelectedSchema)}.` : ''}${quoteIdent(tableName)}`
+    : ''
+  const query = readMode === 'table' ? tableQuery : customSQL
+
+  const handleBrowse = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!resolvedConfig) return
+    update({ dbStatus: 'browsing', dbError: undefined })
+    try {
+      const tables = await window.api.pgListTables(resolvedConfig)
+      update({ dbTables: tables, dbStatus: 'idle', dbError: undefined })
+    } catch (err) {
+      update({ dbStatus: 'error', dbError: (err as Error).message })
+    }
+  }, [resolvedConfig, update])
+
+  const handleSelectTable = useCallback((schema: string, table: string) => {
+    update({ tableName: table, dbSelectedSchema: schema, dbSelectedTable: table, dbError: undefined, dbStatus: 'idle' })
+  }, [update])
 
   const doFetch = useCallback(async (force: boolean) => {
     if (!resolvedConfig || !query) return
@@ -81,7 +105,7 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
     ? (isCached ? `Cached ${cacheDateStr} · ${rowCount?.toLocaleString()} rows` : `${rowCount?.toLocaleString()} rows`)
     : status === 'fetching' ? 'Fetching…'
       : status === 'error' ? 'Fetch error'
-        : isConnected ? (query ? 'Click Fetch to load (or use cache)' : 'Enter table name or SQL')
+        : isConnected ? (query ? 'Click Fetch to load (or use cache)' : 'Select a table or enter SQL')
           : 'Connect a database'
 
   return (
@@ -110,16 +134,40 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
             </div>
           </div>
           {readMode === 'table' ? (
-            <div className="node-body-row">
-              <span className="node-label">Table</span>
-              <input
-                className="node-input"
-                placeholder="table_name"
-                value={tableName}
-                onChange={(e) => update({ tableName: e.target.value })}
-                onClick={stopProp} onMouseDown={stopProp}
-              />
-            </div>
+            <>
+              <div className="node-body-row">
+                <span className="node-label">Table</span>
+                <button
+                  className="db-fetch-btn"
+                  style={{ flex: 1 }}
+                  onClick={handleBrowse}
+                  onMouseDown={stopProp}
+                  disabled={!isConnected || dbStatus === 'browsing'}
+                >
+                  {dbStatus === 'browsing' ? 'Loading…' : 'Browse Tables'}
+                </button>
+              </div>
+              <div className="node-body-row" style={{ alignItems: 'center' }}>
+                <span className="node-label">Selected</span>
+                <div className="node-input" style={{ display: 'flex', alignItems: 'center', minHeight: 22 }}>
+                  {dbSelectedTable
+                    ? `${dbSelectedSchema}.${dbSelectedTable}`
+                    : (tableName ? tableName : 'No table selected')}
+                </div>
+              </div>
+              {dbError && <div className="db-error-msg">{dbError}</div>}
+              <div onMouseDown={stopProp}>
+                <SchemaTableBrowser
+                  tables={dbTables}
+                  filter={dbFilter}
+                  selectedSchema={dbSelectedSchema}
+                  selectedTable={dbSelectedTable}
+                  filterPlaceholder="schema or table"
+                  onFilterChange={setDbFilter}
+                  onSelect={handleSelectTable}
+                />
+              </div>
+            </>
           ) : (
             <div className="node-body-row" style={{ alignItems: 'flex-start' }}>
               <span className="node-label" style={{ marginTop: 4 }}>SQL</span>
@@ -225,6 +273,7 @@ export const readTableCachedDef: NodeDef<ReadTableCachedNodeData> = {
     readMode: 'table', tableName: '', customSQL: '',
     csvPath: null, columns: [], rowCount: null,
     status: 'idle', resolvedConfig: null, cacheDate: null,
+    dbTables: [], dbSelectedSchema: null, dbSelectedTable: null, dbStatus: 'idle', dbError: undefined,
   }),
   Component: Memoized,
 }

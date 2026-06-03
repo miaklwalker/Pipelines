@@ -1,6 +1,9 @@
 // Import each node file for its side-effect: registerNode() call.
 // Order determines the registry insertion order (used by Sidebar grouping).
 import './CSVInputNode'
+import './JSONInputNode'
+import './UnnestNode'
+import './JsonExtractNode'
 import './JoinNode'
 import './TransformNode'
 import './DestinationNode'

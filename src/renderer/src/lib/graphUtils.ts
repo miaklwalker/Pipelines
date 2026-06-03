@@ -7,6 +7,7 @@ import type {
   AppNode, AppEdge,
   JoinNodeData, JoinColSelection, DestinationNodeData,
   ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData,
+  UnnestNodeData,
 } from './types'
 
 function sourceColumnFromHandle(sourceHandle: string | null | undefined): string | null {
@@ -53,6 +54,15 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
       const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
       const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
       return { ...node, data: { ...node.data, inputColumns: inputCols } }
+    }
+
+    // ── Unnest ───────────────────────────────────────────────────────────────
+    if (node.type === 'unnest') {
+      const d = node.data as UnnestNodeData
+      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
+      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
+      const arrayColumn = inputCols.some((c) => c.name === d.arrayColumn) ? d.arrayColumn : ''
+      return { ...node, data: { ...d, inputColumns: inputCols, arrayColumn } }
     }
 
     // ── Destination ───────────────────────────────────────────────────────────

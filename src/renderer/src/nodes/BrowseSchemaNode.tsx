@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from 'react'
+import { memo, useCallback } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { LayoutGrid, Loader, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react'
 import type { AppNode, BrowseSchemaNodeData } from '../lib/types'
@@ -8,6 +8,7 @@ import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, colHandle, connHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
+import SchemaTableBrowser from './shared/SchemaTableBrowser'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: BrowseSchemaNodeData }>
@@ -50,8 +51,7 @@ function BrowseSchemaNode({ id, data, selected }: Props) {
   }, [resolvedConfig, update, setNodes, id])
 
   // Click a table in the list → fetch its data into a local CSV
-  const handleSelectTable = useCallback(async (e: React.MouseEvent, schema: string, name: string) => {
-    e.stopPropagation()
+  const handleSelectTable = useCallback(async (schema: string, name: string) => {
     if (!resolvedConfig) return
     update({ selectedSchema: schema, selectedTable: name, status: 'fetching', error: undefined })
     const query = `SELECT * FROM "${schema}"."${name}"`
@@ -69,21 +69,6 @@ function BrowseSchemaNode({ id, data, selected }: Props) {
       update({ status: 'error', error: String(err) })
     }
   }, [resolvedConfig, update, id, setNodes, getEdges])
-
-  // Filter + group the table list
-  const filteredTables = useMemo(() => {
-    const q = filter.toLowerCase()
-    return q ? tables.filter((t) => `${t.schema}.${t.name}`.toLowerCase().includes(q)) : tables
-  }, [tables, filter])
-
-  const grouped = useMemo(() => {
-    const map = new Map<string, string[]>()
-    for (const t of filteredTables) {
-      if (!map.has(t.schema)) map.set(t.schema, [])
-      map.get(t.schema)!.push(t.name)
-    }
-    return map
-  }, [filteredTables])
 
   const subtitle = isReady
     ? `${selectedSchema}.${selectedTable} · ${rowCount?.toLocaleString()} rows`
@@ -124,46 +109,20 @@ function BrowseSchemaNode({ id, data, selected }: Props) {
 
         {error && <div className="db-error-msg">{error}</div>}
 
-        {/* Search filter */}
-        {tables.length > 0 && (
-          <input
-            className="node-input schema-filter"
-            placeholder="Filter tables…"
-            value={filter}
-            onChange={(e) => update({ filter: e.target.value })}
-            onClick={stopProp}
-            onMouseDown={stopProp}
+        <div onMouseDown={stopProp}>
+          <SchemaTableBrowser
+            tables={tables}
+            filter={filter}
+            selectedSchema={selectedSchema}
+            selectedTable={selectedTable}
+            selectedStatus={status === 'ready' || status === 'fetching' ? status : null}
+            onFilterChange={(value) => update({ filter: value })}
+            onSelect={(schema, name) => {
+              if (isBusy) return
+              void handleSelectTable(schema, name)
+            }}
           />
-        )}
-
-        {/* Schema / table tree */}
-        {grouped.size > 0 && (
-          <div className="schema-browser" onMouseDown={stopProp}>
-            {[...grouped.entries()].map(([schema, names]) => (
-              <div key={schema} className="schema-group">
-                <div className="schema-group-title">{schema}</div>
-                {names.map((name) => {
-                  const isSel = selectedSchema === schema && selectedTable === name
-                  return (
-                    <div
-                      key={name}
-                      className={`schema-table-row${isSel ? ' selected' : ''}`}
-                      onClick={(e) => handleSelectTable(e, schema, name)}
-                    >
-                      <span className="schema-table-name">{name}</span>
-                      {isSel && status === 'ready' && (
-                        <CheckCircle size={10} strokeWidth={2} className="schema-table-check" />
-                      )}
-                      {isSel && status === 'fetching' && (
-                        <Loader size={10} strokeWidth={2} className="spin schema-table-check" />
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            ))}
-          </div>
-        )}
+        </div>
       </div>
 
       {/* Column list after fetch */}

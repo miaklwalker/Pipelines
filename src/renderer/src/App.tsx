@@ -23,7 +23,7 @@ import { buildNodeSQL } from './lib/sqlBuilder'
 import { propagateColumns } from './lib/graphUtils'
 import type {
   AppNode, AppEdge,
-  CSVNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
+  CSVNodeData, JSONNodeData, UnnestNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
   ConcatNodeData,
   UniqueNodeData, MapValueData, ConditionalOutputData,
@@ -91,6 +91,8 @@ function getUpstreamEdgeDistances(nodeId: string, edges: AppEdge[]): Map<string,
 function nodeLabel(node: AppNode | undefined): string {
   if (!node) return ''
   if (node.type === 'csv-input')   return (node.data as CSVNodeData).fileName || 'CSV'
+  if (node.type === 'json-input')   return (node.data as JSONNodeData).fileName || 'JSON'
+  if (node.type === 'unnest')       return 'Unnest'
   if (node.type === 'join')        return 'Join'
   if (node.type === 'transform')   return 'Transform'
   if (node.type === 'destination') return 'Destination'
@@ -115,6 +117,10 @@ function nodeLabel(node: AppNode | undefined): string {
     return d.selectedTable ? `${d.selectedSchema}.${d.selectedTable}` : 'Browse Schema'
   }
   return ''
+}
+
+function quoteIdent(v: string): string {
+  return `"${v.replace(/"/g, '""')}"`
 }
 
 // ── Pipeline execution phase ──────────────────────────────────────────────────
@@ -230,6 +236,80 @@ export default function App() {
   // ── Canvas click → clear selection ───────────────────────────────────────
   const onPaneClick = useCallback(() => setPreviewNodeId(null), [])
 
+  const refetchMissingCachedSource = useCallback(async (missingPath: string): Promise<boolean> => {
+    const cached = nodesRef.current.find((n) => (
+      n.type === 'read-table-cached'
+      && (n.data as ReadTableCachedNodeData).csvPath === missingPath
+    ))
+    if (!cached) return false
+
+    const d = cached.data as ReadTableCachedNodeData
+    if (!d.resolvedConfig) return false
+
+    const query = d.readMode === 'table'
+      ? (d.tableName
+          ? `SELECT * FROM ${d.dbSelectedSchema ? `${quoteIdent(d.dbSelectedSchema)}.` : ''}${quoteIdent(d.tableName)}`
+          : '')
+      : d.customSQL
+    if (!query.trim()) return false
+
+    try {
+      const result = await window.api.pgFetchCached(d.resolvedConfig, query, false)
+      setNodes((ns) => {
+        const updated = ns.map((n) => (
+          n.id === cached.id
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  csvPath: result.csvPath,
+                  columns: result.columns,
+                  rowCount: result.rowCount,
+                  status: 'ready',
+                  error: undefined,
+                  cacheDate: result.cacheDate ?? new Date().toISOString(),
+                },
+              }
+            : n
+        )) as AppNode[]
+        return propagateColumns(updated, edgesRef.current)
+      })
+      return true
+    } catch {
+      return false
+    }
+  }, [setNodes])
+
+  const applyPreviewResult = useCallback((node: AppNode, result: PreviewResult) => {
+    setPreviewResult(result)
+    if (node.type === 'increment-value') {
+      const nodeData = node.data as IncrementValueData
+      const anchorEdge = edgesRef.current.find((e) => e.target === node.id && e.targetHandle === 'anchor-in')
+      const anchorNode = anchorEdge ? nodesRef.current.find((n) => n.id === anchorEdge.source) : null
+      const anchorRowCount = anchorNode && typeof (anchorNode.data as { rowCount?: unknown }).rowCount === 'number'
+        ? (anchorNode.data as { rowCount: number }).rowCount
+        : null
+      const previewCount = typeof result.rowCount === 'number' && Number.isFinite(result.rowCount)
+        ? result.rowCount
+        : (typeof anchorRowCount === 'number' && Number.isFinite(anchorRowCount)
+          ? anchorRowCount
+          : result.rows.length)
+      const carryBase = typeof nodeData.carryFromLastValue === 'number' ? nodeData.carryFromLastValue : 0
+      const startAt = typeof nodeData.startAt === 'number' ? nodeData.startAt : 1
+      const lastValue = previewCount > 0
+        ? carryBase + startAt - 1 + previewCount
+        : null
+      setNodes((ns) => {
+        const nextNodes = ns.map((n) => (
+          n.id === node.id
+            ? { ...n, data: { ...n.data, lastValue: Number.isFinite(lastValue ?? NaN) ? lastValue : null } }
+            : n
+        )) as AppNode[]
+        return propagateColumns(nextNodes, edgesRef.current)
+      })
+    }
+  }, [setNodes])
+
   // ── Node click → preview ──────────────────────────────────────────────────
   const onNodeClick = useCallback((_: React.MouseEvent, node: AppNode) => {
     const sql = buildNodeSQL(node.id, nodesRef.current, edgesRef.current)
@@ -245,38 +325,32 @@ export default function App() {
     setPreviewLoading(true)
     window.api.dbPreview(sql)
       .then((result) => {
-        setPreviewResult(result)
+        applyPreviewResult(node, result)
         setPreviewLoading(false)
-
-        if (node.type === 'increment-value') {
-          const nodeData = node.data as IncrementValueData
-          const anchorEdge = edgesRef.current.find((e) => e.target === node.id && e.targetHandle === 'anchor-in')
-          const anchorNode = anchorEdge ? nodesRef.current.find((n) => n.id === anchorEdge.source) : null
-          const anchorRowCount = anchorNode && typeof (anchorNode.data as { rowCount?: unknown }).rowCount === 'number'
-            ? (anchorNode.data as { rowCount: number }).rowCount
-            : null
-          const previewCount = typeof result.rowCount === 'number' && Number.isFinite(result.rowCount)
-            ? result.rowCount
-            : (typeof anchorRowCount === 'number' && Number.isFinite(anchorRowCount)
-              ? anchorRowCount
-              : result.rows.length)
-          const carryBase = typeof nodeData.carryFromLastValue === 'number' ? nodeData.carryFromLastValue : 0
-          const startAt = typeof nodeData.startAt === 'number' ? nodeData.startAt : 1
-          const lastValue = previewCount > 0
-            ? carryBase + startAt - 1 + previewCount
-            : null
-          setNodes((ns) => {
-            const nextNodes = ns.map((n) => (
-              n.id === node.id
-                ? { ...n, data: { ...n.data, lastValue: Number.isFinite(lastValue ?? NaN) ? lastValue : null } }
-                : n
-            )) as AppNode[]
-            return propagateColumns(nextNodes, edgesRef.current)
-          })
-        }
       })
-      .catch((err: Error) => { setPreviewError(err.message ?? String(err)); setPreviewLoading(false) })
-  }, [])
+      .catch(async (err: Error) => {
+        const message = err.message ?? String(err)
+        const missingPathMatch = message.match(/No files found that match the pattern "([^"]+)"/)
+        if (missingPathMatch?.[1]) {
+          const recovered = await refetchMissingCachedSource(missingPathMatch[1])
+          if (recovered) {
+            try {
+              const retried = await window.api.dbPreview(sql)
+              applyPreviewResult(node, retried)
+              setPreviewLoading(false)
+              showToast('Cache file was missing. Refetched cached source and retried preview.')
+              return
+            } catch (retryErr) {
+              setPreviewError(retryErr instanceof Error ? retryErr.message : String(retryErr))
+              setPreviewLoading(false)
+              return
+            }
+          }
+        }
+        setPreviewError(message)
+        setPreviewLoading(false)
+      })
+  }, [applyPreviewResult, refetchMissingCachedSource, showToast])
 
   // ── Node label for preview modal title ───────────────────────────────────
   // (also handles new node types)
@@ -293,6 +367,21 @@ export default function App() {
         }])
         break
       }
+      case 'json-input': {
+        const result = await window.api.selectJSON()
+        if (!result) return
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'json-input', position: spawnPosition(),
+          data: { fileName: result.fileName, filePath: result.filePath, columns: result.columns } satisfies JSONNodeData,
+        }])
+        break
+      }
+      case 'unnest':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'unnest', position: spawnPosition(),
+          data: { arrayColumn: '', itemColumn: 'item', inputColumns: [] } satisfies UnnestNodeData,
+        }])
+        break
       case 'join':
         setNodes((ns) => [...ns, {
           id: uuid(), type: 'join', position: spawnPosition(),
@@ -404,7 +493,12 @@ export default function App() {
       case 'read-table-cached':
         setNodes((ns) => [...ns, {
           id: uuid(), type: 'read-table-cached', position: spawnPosition(),
-          data: { readMode: 'table', tableName: '', customSQL: '', csvPath: null, columns: [], rowCount: null, status: 'idle', resolvedConfig: null, cacheDate: null } satisfies ReadTableCachedNodeData,
+          data: {
+            readMode: 'table', tableName: '', customSQL: '',
+            csvPath: null, columns: [], rowCount: null,
+            status: 'idle', resolvedConfig: null, cacheDate: null,
+            dbTables: [], dbSelectedSchema: null, dbSelectedTable: null, dbStatus: 'idle', dbError: undefined,
+          } satisfies ReadTableCachedNodeData,
         }])
         break
       case 'write-table':

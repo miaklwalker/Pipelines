@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 export type ColumnInfo      = { name: string; type: string }
 export type CSVSelectResult = { filePath: string; fileName: string; columns: ColumnInfo[] }
+export type JSONSelectResult = { filePath: string; fileName: string; columns: ColumnInfo[] }
 export type PreviewResult   = { columns: string[]; rows: (string | null)[][]; rowCount: number | null }
 export type ExportResult    = { filePath: string; rowCount: number | null }
 export type PgConfig        = { host: string; port: number; database: string; user: string; password: string; ssl: boolean }
@@ -14,6 +15,7 @@ export type ProjectLoadResult = { path: string; data: string }
 const api = {
   // CSV
   selectCSV: (): Promise<CSVSelectResult | null> => ipcRenderer.invoke('csv:select'),
+  selectJSON: (): Promise<JSONSelectResult | null> => ipcRenderer.invoke('json:select'),
   exportCSV: (sql: string, delimiter?: string, includeHeader?: boolean, defaultPath?: string, skipDialogIfDefaultPath?: boolean): Promise<ExportResult | null> =>
     ipcRenderer.invoke('csv:export', { sql, delimiter, includeHeader, defaultPath, skipDialogIfDefaultPath }),
   pickCSVPath: (defaultPath?: string): Promise<string | null> =>

@@ -85,6 +85,36 @@ ipcMain.handle('csv:select', async (): Promise<CSVSelectResult | null> => {
   })
 })
 
+// Select and analyze a JSON file containing an array of objects
+ipcMain.handle('json:select', async (): Promise<CSVSelectResult | null> => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Select JSON File',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON Files', extensions: ['json'] }]
+  })
+  if (canceled || !filePaths[0]) return null
+
+  const filePath = filePaths[0]
+  const safe = filePath.replace(/'/g, "''")
+
+  return new Promise((resolve, reject) => {
+    conn.run(
+      `CREATE OR REPLACE VIEW __json_sniff AS SELECT * FROM read_json_auto('${safe}', format='array') LIMIT 0`,
+      (err) => {
+        if (err) return reject(new Error(`Failed to read JSON: ${err.message}`))
+        conn.all('DESCRIBE __json_sniff', (descErr, rows) => {
+          if (descErr) return reject(new Error(descErr.message))
+          const columns: ColumnInfo[] = (rows as DescribeRow[]).map((r) => ({
+            name: r.column_name,
+            type: normalizeType(r.column_type)
+          }))
+          resolve({ filePath, fileName: filePath.split('\\').pop() ?? filePath, columns })
+        })
+      }
+    )
+  })
+})
+
 // Preview a node's SQL output (first 50 rows)
 ipcMain.handle('db:preview', async (_, { sql }: { sql: string }): Promise<PreviewResult> => {
   return new Promise((resolve, reject) => {
