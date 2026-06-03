@@ -210,6 +210,7 @@ export default function App() {
     if (connection.source === connection.target) return false
     const src = connection.sourceHandle ?? ''
     const tgt = connection.targetHandle ?? ''
+    const sourceNode = nodesRef.current.find((n) => n.id === connection.source)
     // Row source handles (including Filter's pass/fail branches)
     const srcRow = src === 'row-out' || src === 'row-out-pass' || src === 'row-out-fail'
     // Row target handles (including Filter's val-in and emitter anchor-in)
@@ -220,6 +221,9 @@ export default function App() {
     const tgtCol  = tgt.startsWith('col-in-')
     const srcConn = src === 'conn-out'
     const tgtConn = tgt === 'conn-in'
+    if (tgt === 'col-in-carry') {
+      return sourceNode?.type === 'increment-value' && src === 'col-out'
+    }
     return (srcRow && tgtRow) || (srcCol && tgtCol) || (srcConn && tgtConn)
   }, [])
 
@@ -240,7 +244,37 @@ export default function App() {
     console.log('[preview SQL]', sql)
     setPreviewLoading(true)
     window.api.dbPreview(sql)
-      .then((result) => { setPreviewResult(result); setPreviewLoading(false) })
+      .then((result) => {
+        setPreviewResult(result)
+        setPreviewLoading(false)
+
+        if (node.type === 'increment-value') {
+          const nodeData = node.data as IncrementValueData
+          const anchorEdge = edgesRef.current.find((e) => e.target === node.id && e.targetHandle === 'anchor-in')
+          const anchorNode = anchorEdge ? nodesRef.current.find((n) => n.id === anchorEdge.source) : null
+          const anchorRowCount = anchorNode && typeof (anchorNode.data as { rowCount?: unknown }).rowCount === 'number'
+            ? (anchorNode.data as { rowCount: number }).rowCount
+            : null
+          const previewCount = typeof result.rowCount === 'number' && Number.isFinite(result.rowCount)
+            ? result.rowCount
+            : (typeof anchorRowCount === 'number' && Number.isFinite(anchorRowCount)
+              ? anchorRowCount
+              : result.rows.length)
+          const carryBase = typeof nodeData.carryFromLastValue === 'number' ? nodeData.carryFromLastValue : 0
+          const startAt = typeof nodeData.startAt === 'number' ? nodeData.startAt : 1
+          const lastValue = previewCount > 0
+            ? carryBase + startAt - 1 + previewCount
+            : null
+          setNodes((ns) => {
+            const nextNodes = ns.map((n) => (
+              n.id === node.id
+                ? { ...n, data: { ...n.data, lastValue: Number.isFinite(lastValue ?? NaN) ? lastValue : null } }
+                : n
+            )) as AppNode[]
+            return propagateColumns(nextNodes, edgesRef.current)
+          })
+        }
+      })
       .catch((err: Error) => { setPreviewError(err.message ?? String(err)); setPreviewLoading(false) })
   }, [])
 

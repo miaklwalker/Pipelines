@@ -88,19 +88,25 @@ ipcMain.handle('csv:select', async (): Promise<CSVSelectResult | null> => {
 // Preview a node's SQL output (first 50 rows)
 ipcMain.handle('db:preview', async (_, { sql }: { sql: string }): Promise<PreviewResult> => {
   return new Promise((resolve, reject) => {
-    conn.all(`SELECT * FROM (${sql}) __preview LIMIT 50`, (err, rows) => {
-      if (err) return reject(new Error(err.message))
-      if (!rows?.length) return resolve({ columns: [], rows: [] })
-      const columns = Object.keys(rows[0] as object)
-      const data = (rows as Record<string, unknown>[]).map((r) =>
-        columns.map((c) => {
-          const v = r[c]
-          if (v === null || v === undefined) return null
-          if (v instanceof Date) return v.toISOString()
-          return String(v)
-        })
-      )
-      resolve({ columns, rows: data })
+    conn.all(`SELECT COUNT(*) AS cnt FROM (${sql}) __preview_count`, (countErr, countRows) => {
+      if (countErr) return reject(new Error(countErr.message))
+      const totalCountRow = (countRows as { cnt: number | bigint }[] | null)?.[0]
+      const rowCount = totalCountRow == null ? null : Number(totalCountRow.cnt)
+
+      conn.all(`SELECT * FROM (${sql}) __preview LIMIT 50`, (err, rows) => {
+        if (err) return reject(new Error(err.message))
+        if (!rows?.length) return resolve({ columns: [], rows: [], rowCount })
+        const columns = Object.keys(rows[0] as object)
+        const data = (rows as Record<string, unknown>[]).map((r) =>
+          columns.map((c) => {
+            const v = r[c]
+            if (v === null || v === undefined) return null
+            if (v instanceof Date) return v.toISOString()
+            return String(v)
+          })
+        )
+        resolve({ columns, rows: data, rowCount })
+      })
     })
   })
 })
@@ -444,6 +450,7 @@ export interface CSVSelectResult {
 export interface PreviewResult {
   columns: string[]
   rows: (string | null)[][]
+  rowCount: number | null
 }
 
 export interface ExportResult {

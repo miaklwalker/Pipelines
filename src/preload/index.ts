@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 export type ColumnInfo      = { name: string; type: string }
 export type CSVSelectResult = { filePath: string; fileName: string; columns: ColumnInfo[] }
-export type PreviewResult   = { columns: string[]; rows: (string | null)[][] }
+export type PreviewResult   = { columns: string[]; rows: (string | null)[][]; rowCount: number | null }
 export type ExportResult    = { filePath: string; rowCount: number | null }
 export type PgConfig        = { host: string; port: number; database: string; user: string; password: string; ssl: boolean }
 export type PgFetchResult   = { csvPath: string; columns: ColumnInfo[]; rowCount: number; fromCache?: boolean; cacheDate?: string }

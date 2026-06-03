@@ -60,7 +60,8 @@ export default function PreviewDrawer({ nodeLabel, result, loading, error, onClo
         <span className="preview-title">Preview — {nodeLabel}</span>
         {result && (
           <span className="preview-badge">
-            {result.rows.length} row{result.rows.length !== 1 ? 's' : ''} shown (max 50)
+            {result.rows.length} row{result.rows.length !== 1 ? 's' : ''} shown
+            {typeof result.rowCount === 'number' ? ` of ${result.rowCount}` : ''} (max 50)
           </span>
         )}
         <button className="preview-close" onClick={onClose} title="Close (Esc)">

@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildNodeSQL, getNodeOutputColumns } from '../../src/renderer/src/lib/sqlBuilder'
 import { propagateColumns } from '../../src/renderer/src/lib/graphUtils'
-import type { AppNode, AppEdge } from '../../src/renderer/src/lib/types'
+import { type AppNode, type AppEdge } from '../../src/renderer/src/lib/types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -497,6 +497,25 @@ describe('increment-value', () => {
     } as AppNode
     expect(buildNodeSQL('n1', [n], [])).toContain('+ 4')
   })
+
+  it('continues from a previous increment when carry input is connected', () => {
+    const src = csvNode('n0')
+    const prev: AppNode = {
+      id: 'n1', type: 'increment-value', position: pos,
+      data: { columnName: 'idx', startAt: 1, hasAnchor: true, hasCarry: false, lastValue: 7, carryFromLastValue: null },
+    } as AppNode
+    const next: AppNode = {
+      id: 'n2', type: 'increment-value', position: pos,
+      data: { columnName: 'idx2', startAt: 1, hasAnchor: true, hasCarry: true, carryFromLastValue: 7, lastValue: null },
+    } as AppNode
+    const eAnchor1 = edge('e1', 'n0', 'n1', 'row-out', 'anchor-in')
+    const eAnchor2 = edge('e2', 'n0', 'n2', 'row-out', 'anchor-in')
+    const eCarry   = edge('e3', 'n1', 'n2', 'col-out', 'col-in-carry')
+    const sql = buildNodeSQL('n2', [src, prev, next], [eAnchor1, eAnchor2, eCarry])!
+    expect(sql).toContain('+ 7')
+    expect(sql).toContain('ROW_NUMBER() OVER ()')
+    expect(sql).toContain('AS "idx2"')
+  })
 })
 
 // ── map-value emitter ─────────────────────────────────────────────────────────
@@ -651,6 +670,26 @@ describe('destination', () => {
     expect(sql).toContain("('US') AS \"country\"")
   })
 
+  it('substitutes increment emitter expression including carry offset', () => {
+    const inc: AppNode = {
+      id: 'n3', type: 'increment-value', position: pos,
+      data: { columnName: 'seq', startAt: 1, hasAnchor: true, hasCarry: true, carryFromLastValue: 217645, lastValue: null },
+    } as AppNode
+    const d: AppNode = {
+      id: 'n2', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        inputColumns: [],
+        colMap: [{ sourceCol: 'seq', destCol: 'seq', included: true }],
+      },
+    } as AppNode
+    const incAnchor = edge('e2', 'n1', 'n3', 'row-out', 'anchor-in')
+    const colEdge = edge('e3', 'n3', 'n2', 'col-out', 'col-in-seq')
+    const sql = buildNodeSQL('n2', [src, inc, d], [e1, incAnchor, colEdge])!
+    expect(sql).toContain('ROW_NUMBER() OVER () + 217645')
+    expect(sql).toContain('AS "seq"')
+  })
+
   it('falls back to NULL when a stale source column is not present upstream', () => {
     const upstream = csvNode('n1', '/f.csv', ['brand', 'user_who_requested', 'user_who_approved'])
     const d: AppNode = {
@@ -683,8 +722,8 @@ describe('destination', () => {
       [edge('e1', 'n1', 'n2'), edge('e2', 'n1', 'n2', 'col-out-user_who_requested', 'col-in-custom-created_by')]
     )
 
-    const nextDest = propagated.find((node) => node.id === 'n2')!
-    expect((nextDest.data as DestinationNodeData).colMap[0].sourceCol).toBe('user_who_requested')
+    const nextDest = propagated.find((node) => node.id === 'n2')! as AppNode & { data: { colMap: { sourceCol: string }[] } }
+    expect(nextDest.data.colMap[0].sourceCol).toBe('user_who_requested')
 
     const sql = buildNodeSQL('n2', propagated, [edge('e1', 'n1', 'n2'), edge('e2', 'n1', 'n2', 'col-out-user_who_requested', 'col-in-custom-created_by')])!
     expect(sql).toContain('"user_who_requested" AS "created_by"')

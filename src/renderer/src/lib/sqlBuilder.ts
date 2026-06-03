@@ -35,9 +35,11 @@ function emitterExpression(nodeId: string, nodes: AppNode[]): string | null {
   if (node.type === 'increment-value') {
     const d = node.data as IncrementValueData
     const start = typeof d.startAt === 'number' ? d.startAt : 1
-    return start === 1
+    const base = start === 1
       ? `ROW_NUMBER() OVER ()`
       : `ROW_NUMBER() OVER () + ${start - 1}`
+    const carryBase = typeof d.carryFromLastValue === 'number' ? d.carryFromLastValue : 0
+    return carryBase > 0 ? `${base} + ${carryBase}` : base
   }
 
   if (node.type === 'map-value') {
@@ -554,14 +556,35 @@ export function buildNodeSQL(
       const d = node.data as IncrementValueData
       const colName = d.columnName || 'index'
       const start   = typeof d.startAt === 'number' ? d.startAt : 1
-      const expr    = start === 1
+      const baseExpr = start === 1
         ? `ROW_NUMBER() OVER ()`
         : `ROW_NUMBER() OVER () + ${start - 1}`
       const anchorEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'anchor-in')
+      const carryEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'col-in-carry')
+      let carryExpr: string | null = null
+      if (carryEdge) {
+        const sourceNode = nodes.find((n) => n.id === carryEdge.source)
+        if (sourceNode && sourceNode.type === 'increment-value') {
+          const sourceData = sourceNode.data as IncrementValueData
+          if (typeof sourceData.lastValue === 'number') {
+            carryExpr = `${sourceData.lastValue}`
+          } else {
+            const sourceCol = sourceData.columnName || 'index'
+            const carrySQL = buildNodeSQL(carryEdge.source, nodes, edges, carryEdge.sourceHandle ?? undefined)
+            if (carrySQL) {
+              carryExpr = `COALESCE((SELECT MAX("${sourceCol}") FROM (${carrySQL}) __carry), 0)`
+            }
+          }
+        }
+      }
       if (anchorEdge) {
         const anchorSQL = buildNodeSQL(anchorEdge.source, nodes, edges, anchorEdge.sourceHandle ?? undefined)
-        if (anchorSQL) return `SELECT ${expr} AS "${colName}" FROM (${anchorSQL}) __anchor`
+        if (anchorSQL) {
+          const expr = carryExpr ? `${baseExpr} + ${carryExpr}` : baseExpr
+          return `SELECT ${expr} AS "${colName}" FROM (${anchorSQL}) __anchor`
+        }
       }
+      const expr = carryExpr ? `${baseExpr} + ${carryExpr}` : baseExpr
       return `SELECT ${expr} AS "${colName}"`
     }
 

@@ -14,6 +14,7 @@ export interface CSVSelectResult {
 export interface PreviewResult {
   columns: string[]
   rows: (string | null)[][]
+  rowCount: number | null
 }
 
 export interface ExportResult {
@@ -104,6 +105,9 @@ export interface IncrementValueData extends Record<string, unknown> {
   columnName: string           // name of the emitted column
   startAt: number              // first value (default 1)
   hasAnchor?: boolean
+  hasCarry?: boolean           // true when chained to a previous increment output
+  lastValue?: number | null    // last seen output value from preview/execution
+  carryFromLastValue?: number | null // derived from the connected increment source
 }
 
 // ─── PostgreSQL types ────────────────────────────────────────────────────────

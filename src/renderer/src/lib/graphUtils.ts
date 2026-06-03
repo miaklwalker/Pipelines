@@ -97,7 +97,23 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
     if (node.type === 'static-value' || node.type === 'increment-value'
       || node.type === 'map-value' || node.type === 'conditional-output') {
       const hasAnchor = edges.some((e) => e.target === node.id && e.targetHandle === 'anchor-in')
-      return { ...node, data: { ...node.data, hasAnchor } }
+      const hasCarry = node.type === 'increment-value'
+        ? edges.some((e) => e.target === node.id && e.targetHandle === 'col-in-carry')
+        : undefined
+      if (node.type === 'increment-value') {
+        const carryEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'col-in-carry')
+        let carryFromLastValue: number | null = null
+        if (carryEdge) {
+          const carryNode = nodes.find((n) => n.id === carryEdge.source && n.type === 'increment-value')
+          const carryValue = carryNode ? (carryNode.data as IncrementValueData).lastValue : null
+          carryFromLastValue = typeof carryValue === 'number' ? carryValue : null
+        }
+        return {
+          ...node,
+          data: { ...node.data, hasAnchor, hasCarry, carryFromLastValue },
+        }
+      }
+      return { ...node, data: { ...node.data, hasAnchor, ...(hasCarry !== undefined ? { hasCarry } : {}) } }
     }
 
     // ── Write-table: resolvedConfig from ConnectionNode + inputColumns from row-in ─

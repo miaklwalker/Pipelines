@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { CSVSelectResult, PreviewResult, ExportResult } from './lib/types'
+import type { CSVSelectResult, PreviewResult, ExportResult, ProjectLoadResult } from './lib/types'
 
 declare global {
   interface Window {
@@ -10,7 +10,7 @@ declare global {
       dbPreview:   (sql: string) => Promise<PreviewResult>
       saveProject: (data: string) => Promise<string | null>
       saveToPath:  (path: string, data: string) => Promise<void>
-      loadProject: () => Promise<string | null>
+      loadProject: () => Promise<ProjectLoadResult | null>
     }
   }
 }
