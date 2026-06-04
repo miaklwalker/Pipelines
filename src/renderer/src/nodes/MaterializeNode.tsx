@@ -6,7 +6,7 @@ import { buildNodeSQL } from '../lib/sqlBuilder'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
+import { rowHandle, HEADER_ROW_IN, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ function MaterializeNode({ id, data, selected }: Props) {
         type="target"
         position={Position.Left}
         id="row-in"
-        style={rowHandle(true, { top: '50%', left: -7 })}
+        style={rowHandle(true, HEADER_ROW_IN)}
       />
 
       {/* Row output — top-right corner */}

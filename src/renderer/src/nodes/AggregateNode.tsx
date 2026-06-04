@@ -6,7 +6,7 @@ import type { AppNode, AggregateNodeData, AggItem, AggFunc } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
+import { rowHandle, HEADER_ROW_IN, TOP_RIGHT_ROW_OUT } from './shared/handles'
 
 const AGG_FUNCS: AggFunc[] = ['COUNT', 'COUNT_DISTINCT', 'SUM', 'AVG', 'MIN', 'MAX']
 const AGG_LABELS: Record<AggFunc, string> = {
@@ -57,7 +57,7 @@ function AggregateNode({ id, data, selected }: Props) {
   return (
     <PipelineNode selected={selected}>
       <Handle type="target" position={Position.Left} id="row-in"
-        style={rowHandle(hasInput, { top: '50%', left: -7 })}
+        style={rowHandle(hasInput, HEADER_ROW_IN)}
       />
       <Handle type="source" position={Position.Right} id="row-out"
         style={rowHandle(true, TOP_RIGHT_ROW_OUT)}

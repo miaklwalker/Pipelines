@@ -1,18 +1,18 @@
-import { memo, useCallback } from 'react'
+import { memo } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Layers } from 'lucide-react'
 import type { AppNode, ConcatNodeData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
+import { rowHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
+import { ColumnList } from './shared/columns'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ConcatNodeData }>
 
 function ConcatNode({ id, data, selected }: Props) {
   const { inputColumns = [] } = data
-  const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
   const hasInput = inputColumns.length > 0
   const subtitle = hasInput
@@ -34,22 +34,7 @@ function ConcatNode({ id, data, selected }: Props) {
 
       <NodeHeader def={concatDef} id={id} subtitle={subtitle} />
 
-      {hasInput && (
-        <div className="column-list">
-          {inputColumns.map((col) => (
-            <div key={col.name} className="column-row">
-              <span className="col-name" title={col.name}>{col.name}</span>
-              <Handle
-                type="source"
-                position={Position.Right}
-                id={`col-out-${col.name}`}
-                onMouseDown={stopProp}
-                style={colHandle({ width: 11, height: 11 })}
-              />
-            </div>
-          ))}
-        </div>
-      )}
+      <ColumnList columns={inputColumns} />
 
       {!hasInput && (
         <div style={{ padding: '10px 14px', color: 'var(--text-muted)', fontSize: 11 }}>

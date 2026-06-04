@@ -5,7 +5,7 @@ import type { AppNode, LimitNodeData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
+import { rowHandle, HEADER_ROW_IN, TOP_RIGHT_ROW_OUT } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: LimitNodeData }>
@@ -26,7 +26,7 @@ function LimitNode({ id, data, selected }: Props) {
   return (
     <PipelineNode selected={selected}>
       <Handle type="target" position={Position.Left} id="row-in"
-        style={rowHandle(true, { top: '50%', left: -7 })}
+        style={rowHandle(true, HEADER_ROW_IN)}
       />
       <Handle type="source" position={Position.Right} id="row-out"
         style={rowHandle(true, TOP_RIGHT_ROW_OUT)}

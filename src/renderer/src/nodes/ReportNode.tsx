@@ -6,7 +6,7 @@ import { buildNodeSQL, getNodeOutputColumns } from '../lib/sqlBuilder'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
+import { rowHandle, HEADER_ROW_IN, TOP_RIGHT_ROW_OUT } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ReportNodeData }>
@@ -60,7 +60,7 @@ function ReportNode({ id, data, selected }: Props) {
   return (
     <PipelineNode selected={selected}>
       <Handle type="target" position={Position.Left} id="row-in"
-        style={rowHandle(connected, { top: '50%', left: -7 })}
+        style={rowHandle(connected, HEADER_ROW_IN)}
       />
       <Handle type="source" position={Position.Right} id="row-out"
         style={rowHandle(connected, TOP_RIGHT_ROW_OUT)}

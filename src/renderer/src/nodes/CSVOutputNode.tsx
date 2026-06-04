@@ -6,7 +6,7 @@ import { buildNodeSQL } from '../lib/sqlBuilder'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle } from './shared/handles'
+import { rowHandle, HEADER_ROW_IN } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: CSVOutputNodeData }>
@@ -107,7 +107,7 @@ function CSVOutputNode({ id, data, selected }: Props) {
   return (
     <PipelineNode selected={selected}>
       <Handle type="target" position={Position.Left} id="row-in"
-        style={rowHandle(hasInput, { top: '50%', left: -7 })}
+        style={rowHandle(hasInput, HEADER_ROW_IN)}
       />
 
       <NodeHeader

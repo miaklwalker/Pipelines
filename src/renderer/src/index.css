@@ -1366,6 +1366,36 @@ html, body, #root {
 .filter-io-dot-green  { background: var(--green); border: 1px solid var(--green-dark); }
 .filter-io-dot-red    { background: var(--red);   border: 1px solid rgba(239,68,68,0.6); }
 
+/* ── Filter column list P/F header ──────────────────────────────────── */
+.filter-col-list-hdr {
+  display: flex;
+  align-items: center;
+  padding: 3px 8px 3px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.filter-col-list-hdr-name {
+  flex: 1;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.filter-col-list-hdr-pass {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--green);
+  letter-spacing: 0.05em;
+  margin-right: 14px;
+}
+.filter-col-list-hdr-fail {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--red);
+  letter-spacing: 0.05em;
+  margin-right: 4px;
+}
+
 /* Per-column rows in Filter — taller to fit stacked pass/fail handles */
 .filter-column-row {
   display: flex;

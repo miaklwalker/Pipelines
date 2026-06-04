@@ -5,7 +5,7 @@ import type { AppNode, ConditionalOutputData } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { colHandle } from './shared/handles'
+import { colHandle, HEADER_ROW_TOP } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ConditionalOutputData }>
@@ -38,7 +38,7 @@ function ConditionalOutputNode({ id, data, selected }: Props) {
       {/* Anchor input — amber square */}
       <Handle type="target" position={Position.Left} id="anchor-in"
         style={{
-          top: '50%', left: -7, width: 11, height: 11, borderRadius: 2,
+          top: HEADER_ROW_TOP, left: -7, width: 11, height: 11, borderRadius: 2,
           background: hasAnchor ? '#f59e0b' : '#44403c',
           border: `2px solid ${hasAnchor ? '#d97706' : '#292524'}`,
         }}

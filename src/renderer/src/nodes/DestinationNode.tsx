@@ -6,7 +6,7 @@ import { propagateColumns } from '../lib/graphUtils'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, colHandle, connHandle } from './shared/handles'
+import { rowHandle, colHandle, connHandle, HEADER_ROW_OUT } from './shared/handles'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: DestinationNodeData }>
@@ -186,7 +186,7 @@ function DestinationNode({ id, data, selected }: Props) {
       />
       {/* Row output — passes destination result downstream */}
       <Handle type="source" position={Position.Right} id="row-out"
-        style={rowHandle(hasAny, { top: '50%', right: -7 })}
+        style={rowHandle(hasAny, HEADER_ROW_OUT)}
       />
 
       <NodeHeader

@@ -58,3 +58,18 @@ export function connHandle(connected: boolean, overrides?: CSSProperties): CSSPr
 export const TOP_RIGHT_ROW_OUT: CSSProperties = {
   top: 0, right: 0, transform: 'translate(50%, -50%)',
 }
+
+// ── Header-centered row handles ───────────────────────────────────────────────
+// Use these on any node that has a single row-in / row-out so the handle stays
+// pinned to the visual centre of the header regardless of node body height.
+// (React Flow's handle class adds translateY(-50%), so `top` here is the
+//  desired *centre* Y measured from the inside of the node's top border.)
+export const HEADER_ROW_TOP = 23   // px  ≈  9px padding + half of ~28px content
+
+export const HEADER_ROW_IN: CSSProperties = {
+  top: HEADER_ROW_TOP, left: -7,
+}
+
+export const HEADER_ROW_OUT: CSSProperties = {
+  top: HEADER_ROW_TOP, right: -7,
+}

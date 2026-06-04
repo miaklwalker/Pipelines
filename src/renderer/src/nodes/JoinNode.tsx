@@ -5,7 +5,7 @@ import type { AppNode, JoinNodeData, JoinColSelection } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, colHandle } from './shared/handles'
+import { rowHandle, colHandle, HEADER_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ function JoinNode({ id, data, selected }: Props) {
       />
       {/* Row output */}
       <Handle type="source" position={Position.Right} id="row-out"
-        style={rowHandle(true, { top: '50%', right: -7 })}
+        style={rowHandle(true, HEADER_ROW_OUT)}
       />
 
       <NodeHeader
