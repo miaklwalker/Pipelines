@@ -1,6 +1,10 @@
 import { memo, useCallback, useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { Upload, Loader, CheckCircle, AlertCircle } from 'lucide-react'
+
+function quoteIdent(v: string): string {
+  return `"${v.replace(/"/g, '""')}"`
+}
 import type { AppNode, WriteTableNodeData } from '../lib/types'
 import { buildNodeSQL } from '../lib/sqlBuilder'
 import NodeHeader from './shared/NodeHeader'
@@ -66,9 +70,14 @@ function WriteTableNode({ id, data, selected }: Props) {
     const sql = buildNodeSQL(inputEdge.source, nodes as AppNode[], edges as ReturnType<typeof getEdges>, inputEdge.sourceHandle ?? undefined)
     if (!sql) return
 
+    // Build schema-qualified table name: "surplus"."brand"
+    const qualifiedTable = dbSelectedSchema
+      ? `${quoteIdent(dbSelectedSchema)}.${quoteIdent(tableName)}`
+      : tableName
+
     update({ status: 'writing', error: undefined, rowCount: null })
     try {
-      const result = await window.api.pgWrite(resolvedConfig, sql, tableName, writeMode)
+      const result = await window.api.pgWrite(resolvedConfig, sql, qualifiedTable, writeMode)
       update({ status: 'done', rowCount: result.rowCount })
     } catch (err) {
       update({ status: 'error', error: String(err) })
