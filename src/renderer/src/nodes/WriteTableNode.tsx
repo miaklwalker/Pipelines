@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { Upload, Loader, CheckCircle, AlertCircle } from 'lucide-react'
 import type { AppNode, WriteTableNodeData } from '../lib/types'
@@ -7,6 +7,7 @@ import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, connHandle } from './shared/handles'
+import SchemaTableBrowser from './shared/SchemaTableBrowser'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: WriteTableNodeData }>
@@ -17,7 +18,10 @@ function WriteTableNode({ id, data, selected }: Props) {
     tableName = '', writeMode = 'append',
     status = 'idle', rowCount = null, error, resolvedConfig,
     inputColumns = [],
+    dbTables = [], dbSelectedSchema = null, dbStatus = 'idle', dbError,
   } = data
+
+  const [dbFilter, setDbFilter] = useState('')
 
   const update = useCallback(
     (patch: Partial<WriteTableNodeData>) =>
@@ -26,11 +30,35 @@ function WriteTableNode({ id, data, selected }: Props) {
   )
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
+  // ── Browse tables ────────────────────────────────────────────────────────────
+  const handleBrowse = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!resolvedConfig) return
+    update({ dbStatus: 'browsing', dbError: undefined })
+    try {
+      const tables = await window.api.pgListTables(resolvedConfig)
+      update({ dbTables: tables, dbStatus: 'idle', dbError: undefined })
+    } catch (err) {
+      update({ dbStatus: 'error', dbError: (err as Error).message })
+    }
+  }, [resolvedConfig, update])
+
+  const handleSelectTable = useCallback((schema: string, table: string) => {
+    update({
+      tableName: table,
+      dbSelectedSchema: schema,
+      dbStatus: 'idle',
+      dbError: undefined,
+      // Reset write status so the node is ready to write again
+      status: 'idle', error: undefined, rowCount: null,
+    })
+  }, [update])
+
+  // ── Write ────────────────────────────────────────────────────────────────────
   const handleWrite = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!resolvedConfig || !tableName) return
 
-    // Build the upstream pipeline SQL using the full graph
     const nodes = getNodes()
     const edges = getEdges()
     const inputEdge = edges.find((ev) => ev.target === id && ev.targetHandle === 'row-in')
@@ -47,14 +75,17 @@ function WriteTableNode({ id, data, selected }: Props) {
     }
   }, [id, resolvedConfig, tableName, writeMode, getNodes, getEdges, update])
 
-  const hasInput  = inputColumns.length > 0
+  const hasInput    = inputColumns.length > 0
   const isConnected = !!resolvedConfig
-  const canWrite  = isConnected && !!tableName && hasInput && status !== 'writing'
+  const canWrite    = isConnected && !!tableName && hasInput && status !== 'writing'
+  const isBrowsing  = dbStatus === 'browsing'
 
-  const subtitle = status === 'done' ? `${rowCount?.toLocaleString()} rows written`
-    : status === 'writing' ? 'Writing…'
-    : status === 'error' ? 'Write failed'
-    : isConnected ? (tableName ? `→ ${tableName}` : 'Enter table name') : 'Connect a database'
+  const selectedLabel = dbSelectedSchema ? `${dbSelectedSchema}.${tableName}` : tableName
+
+  const subtitle = status === 'done'    ? `${rowCount?.toLocaleString()} rows written`
+    : status === 'writing'              ? 'Writing…'
+    : status === 'error'                ? 'Write failed'
+    : isConnected ? (tableName ? `→ ${selectedLabel}` : 'Select a target table') : 'Connect a database'
 
   return (
     <PipelineNode selected={selected} title="Click to preview data">
@@ -83,18 +114,53 @@ function WriteTableNode({ id, data, selected }: Props) {
       </div>
 
       <div className="node-body">
+
+        {/* ── Table selector ─────────────────────────────────────────────── */}
         <div className="node-body-row">
           <span className="node-label">Table</span>
-          <input
-            className="node-input"
-            placeholder="target_table"
-            value={tableName}
-            onChange={(e) => update({ tableName: e.target.value })}
-            onClick={stopProp} onMouseDown={stopProp}
-          />
+          <button
+            className={`db-fetch-btn${!isConnected || isBrowsing ? ' disabled' : ''}`}
+            style={{ flex: 1 }}
+            onClick={handleBrowse}
+            onMouseDown={stopProp}
+            disabled={!isConnected || isBrowsing}
+          >
+            {isBrowsing
+              ? <><Loader size={11} strokeWidth={2} className="spin" />Loading…</>
+              : 'Browse Tables'}
+          </button>
         </div>
 
+        {/* Selected table display */}
         <div className="node-body-row">
+          <span className="node-label">Target</span>
+          <div
+            className="node-input"
+            style={{ display: 'flex', alignItems: 'center', minHeight: 22, color: tableName ? 'var(--text)' : 'var(--text-muted)', fontStyle: tableName ? 'normal' : 'italic' }}
+          >
+            {tableName ? selectedLabel : 'No table selected'}
+          </div>
+        </div>
+
+        {dbError && <div className="db-error-msg">{dbError}</div>}
+
+        {/* Schema browser — shown once tables are loaded */}
+        {dbTables.length > 0 && (
+          <div onMouseDown={stopProp}>
+            <SchemaTableBrowser
+              tables={dbTables}
+              filter={dbFilter}
+              selectedSchema={dbSelectedSchema}
+              selectedTable={tableName || null}
+              filterPlaceholder="schema or table…"
+              onFilterChange={setDbFilter}
+              onSelect={handleSelectTable}
+            />
+          </div>
+        )}
+
+        {/* ── Write mode ─────────────────────────────────────────────────── */}
+        <div className="node-body-row" style={{ marginTop: dbTables.length ? 6 : 0 }}>
           <span className="node-label">Mode</span>
           <div className="node-toggle-group" onClick={stopProp} onMouseDown={stopProp}>
             <button className={`node-toggle-btn${writeMode === 'append'  ? ' active' : ''}`} onClick={() => update({ writeMode: 'append'  })}>Append</button>
@@ -127,16 +193,16 @@ function WriteTableNode({ id, data, selected }: Props) {
       <div className="status-row">
         <div className={`status-dot ${status === 'done' ? 'ready' : status === 'error' ? 'error' : 'pending'}`} />
         <span className="status-text">
-          {!isConnected ? 'Connect a database node'
-            : !hasInput ? 'Connect a data source'
-            : !tableName ? 'Enter target table name'
-            : status === 'idle' ? 'Ready to write'
+          {!isConnected     ? 'Connect a database node'
+            : !hasInput     ? 'Connect a data source'
+            : !tableName    ? 'Select or enter target table'
+            : status === 'idle'    ? 'Ready to write'
             : status === 'writing' ? 'Writing rows…'
-            : status === 'done' ? `Wrote ${rowCount?.toLocaleString() ?? '?'} rows`
+            : status === 'done'    ? `Wrote ${rowCount?.toLocaleString() ?? '?'} rows`
             : 'Write failed — check error above'}
         </span>
-        {status === 'done' && <CheckCircle size={10} strokeWidth={2} style={{ marginLeft: 'auto', color: 'var(--green)' }} />}
-        {status === 'error' && <AlertCircle size={10} strokeWidth={2} style={{ marginLeft: 'auto', color: 'var(--red)' }} />}
+        {status === 'done'  && <CheckCircle  size={10} strokeWidth={2} style={{ marginLeft: 'auto', color: 'var(--green)' }} />}
+        {status === 'error' && <AlertCircle  size={10} strokeWidth={2} style={{ marginLeft: 'auto', color: 'var(--red)' }} />}
       </div>
     </PipelineNode>
   )
@@ -156,6 +222,7 @@ export const writeTableDef: NodeDef<WriteTableNodeData> = {
     inputs: 'Connection (violet square) + row stream (blue square).',
     outputs: 'None — this is a terminal node.',
     tips: [
+      'Click "Browse Tables" to load your database schema and select a target table.',
       '"Append" adds rows to the existing table; "Replace" truncates first.',
       'The target table must already exist with matching column names.',
       'Click the node to preview the data that would be written before committing.',
@@ -167,6 +234,7 @@ export const writeTableDef: NodeDef<WriteTableNodeData> = {
   defaultData: () => ({
     tableName: '', writeMode: 'append',
     status: 'idle', rowCount: null, inputColumns: [], resolvedConfig: null,
+    dbTables: [], dbSelectedSchema: null, dbStatus: 'idle',
   }),
   Component: Memoized,
 }

@@ -227,6 +227,11 @@ export interface WriteTableNodeData extends Record<string, unknown> {
   status: 'idle' | 'writing' | 'done' | 'error'
   rowCount: number | null
   error?: string
+  /** Schema browser state */
+  dbTables?: TableEntry[]
+  dbSelectedSchema?: string | null
+  dbStatus?: 'idle' | 'browsing' | 'error'
+  dbError?: string
   resolvedConfig?: PgConfig | null
   inputColumns: ColumnInfo[]
 }
