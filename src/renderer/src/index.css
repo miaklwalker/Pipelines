@@ -652,7 +652,7 @@ html, body, #root {
 
 /* ── Sidebar ─────────────────────────────────────────── */
 .sidebar {
-  width: 210px;
+  /* width is set inline so the drag handle can change it */
   flex-shrink: 0;
   background: var(--bg-app);
   border-right: 1px solid var(--border);
@@ -660,7 +660,22 @@ html, body, #root {
   flex-direction: column;
   padding: 8px 0;
   overflow-y: auto;
+  position: relative;   /* positioning context for the resize handle */
 }
+
+/* Drag handle on the right edge */
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 20;
+  background: transparent;
+  transition: background 0.15s;
+}
+.sidebar-resize-handle:hover { background: rgba(59,130,246,0.4); }
 .sidebar-section-title {
   font-size: 9.5px;
   font-weight: 700;
@@ -741,6 +756,72 @@ html, body, #root {
   background: #7c3aed;
   border: 1px solid #5b21b6;
   border-radius: 2px;
+}
+
+/* ── Palette grid (2-3 column layout) ────────────────────────── */
+.palette-grid {
+  display: grid;
+  gap: 3px;
+  padding: 2px 8px;
+  margin-bottom: 2px;
+}
+/* Cards inside a grid: override the single-column margin/width */
+.palette-grid .palette-card {
+  margin: 0;
+  width: auto;
+}
+
+/* ── Compact palette card ─────────────────────────────────────── */
+.palette-card-compact {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 8px 5px 6px;
+  gap: 3px;
+  min-height: 84px;
+}
+.palette-compact-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.palette-compact-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.25;
+  text-align: center;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.palette-compact-desc {
+  font-size: 9px;
+  color: var(--text-muted);
+  line-height: 1.3;
+  text-align: center;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.palette-compact-ports {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 2px;
+  margin-top: auto;
+}
+.palette-compact-port-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .palette-body {
