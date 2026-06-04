@@ -7,7 +7,7 @@ import type {
   AppNode, AppEdge,
   JoinNodeData, JoinColSelection, DestinationNodeData,
   ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData,
-  UnnestNodeData,
+  UnnestNodeData, JsonExtractNodeData,
 } from './types'
 
 function sourceColumnFromHandle(sourceHandle: string | null | undefined): string | null {
@@ -63,6 +63,15 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
       const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
       const arrayColumn = inputCols.some((c) => c.name === d.arrayColumn) ? d.arrayColumn : ''
       return { ...node, data: { ...d, inputColumns: inputCols, arrayColumn } }
+    }
+
+    // ── JSON Extract ─────────────────────────────────────────────────────────
+    if (node.type === 'json-extract') {
+      const d = node.data as JsonExtractNodeData
+      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
+      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
+      const sourceColumn = inputCols.some((c) => c.name === d.sourceColumn) ? d.sourceColumn : ''
+      return { ...node, data: { ...d, inputColumns: inputCols, sourceColumn } }
     }
 
     // ── Destination ───────────────────────────────────────────────────────────

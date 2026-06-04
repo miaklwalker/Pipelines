@@ -1,8 +1,9 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { FileJson, Plus, X } from 'lucide-react'
 import { v4 as uuid } from 'uuid'
-import type { AppNode, JsonExtractNodeData, JsonFieldType } from '../lib/types'
+import { buildNodeSQL } from '../lib/sqlBuilder'
+import type { AppNode, AppEdge, JsonExtractNodeData, JsonFieldType } from '../lib/types'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
@@ -13,9 +14,63 @@ const FIELD_TYPES: JsonFieldType[] = ['TEXT', 'INTEGER', 'DOUBLE', 'BOOLEAN', 'J
 
 type Props = NodeProps<AppNode & { data: JsonExtractNodeData }>
 
+type ValueKind = 'string' | 'int' | 'double' | 'boolean' | 'json'
+
+function toAlias(key: string): string {
+  const normalized = key.trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '')
+  return normalized || 'field'
+}
+
+function classifyValue(value: unknown): ValueKind {
+  if (typeof value === 'boolean') return 'boolean'
+  if (typeof value === 'number') return Number.isInteger(value) ? 'int' : 'double'
+  if (value && typeof value === 'object') return 'json'
+  return 'string'
+}
+
+function inferFieldType(kinds: Set<ValueKind>): JsonFieldType {
+  if (kinds.has('json')) return 'JSON'
+  if (kinds.size === 1 && kinds.has('boolean')) return 'BOOLEAN'
+  if (kinds.has('double')) return 'DOUBLE'
+  if (kinds.has('int') && !kinds.has('string')) return 'INTEGER'
+  return 'TEXT'
+}
+
+function extractJsonKeys(rows: (string | null)[][]): Array<{ key: string; type: JsonFieldType }> {
+  const stats = new Map<string, Set<ValueKind>>()
+
+  for (const row of rows) {
+    const raw = row[0]
+    if (!raw) continue
+    const text = String(raw).trim()
+    if (!text) continue
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      continue
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!stats.has(key)) stats.set(key, new Set<ValueKind>())
+      if (value === null) continue
+      stats.get(key)?.add(classifyValue(value))
+    }
+  }
+
+  return [...stats.entries()]
+    .map(([key, kinds]) => ({ key, type: inferFieldType(kinds) }))
+    .sort((a, b) => a.key.localeCompare(b.key))
+}
+
 function JsonExtractNode({ id, data, selected }: Props) {
-  const { setNodes } = useReactFlow()
+  const { setNodes, getNodes, getEdges } = useReactFlow()
   const { sourceColumn = 'item', keepAll = true, fields = [], inputColumns = [] } = data
+  const [detectingKeys, setDetectingKeys] = useState(false)
+  const [detectError, setDetectError] = useState<string | null>(null)
 
   const update = useCallback(
     (patch: Partial<JsonExtractNodeData>) =>
@@ -33,6 +88,71 @@ function JsonExtractNode({ id, data, selected }: Props) {
   const updateField = useCallback((fieldId: string, patch: Partial<JsonExtractNodeData['fields'][number]>) => {
     update({ fields: fields.map((f) => (f.id === fieldId ? { ...f, ...patch } : f)) })
   }, [fields, update])
+
+  const detectKeys = useCallback(async (columnName: string, replaceExisting: boolean) => {
+    if (!columnName) return
+
+    setDetectError(null)
+    setDetectingKeys(true)
+    try {
+      const nodes = getNodes() as AppNode[]
+      const edges = getEdges() as AppEdge[]
+      const incoming = edges.find((e) => e.target === id && (e.targetHandle ?? 'row-in') === 'row-in')
+      if (!incoming) {
+        setDetectError('Connect a row input first.')
+        return
+      }
+
+      const upstreamSQL = buildNodeSQL(incoming.source, nodes, edges)
+      if (!upstreamSQL) {
+        setDetectError('Upstream pipeline is incomplete.')
+        return
+      }
+
+      const escapedCol = columnName.replace(/"/g, '""')
+      const sampleSQL = `SELECT "${escapedCol}" AS "__json_source" FROM (${upstreamSQL}) __src WHERE "${escapedCol}" IS NOT NULL LIMIT 50`
+      const preview = await window.api.dbPreview(sampleSQL)
+      const detected = extractJsonKeys(preview.rows)
+      if (detected.length === 0) {
+        setDetectError('No JSON object keys were found in sample rows.')
+        return
+      }
+
+      setNodes((ns) => ns.map((n) => {
+        if (n.id !== id) return n
+        const nodeData = n.data as JsonExtractNodeData
+        const existingByPath = new Map(nodeData.fields.map((f) => [f.path.trim(), f]))
+        const existingByAlias = new Map(nodeData.fields.map((f) => [f.alias.trim(), f]))
+        const generated = detected.map(({ key, type }) => {
+          const alias = toAlias(key)
+          const existing = existingByPath.get(key) ?? existingByAlias.get(alias)
+          return {
+            id: existing?.id ?? uuid(),
+            path: key,
+            alias,
+            type: existing?.type ?? type,
+          }
+        })
+
+        return {
+          ...n,
+          data: {
+            ...nodeData,
+            fields: replaceExisting ? generated : [...nodeData.fields, ...generated.filter((g) => !existingByPath.has(g.path) && !existingByAlias.has(g.alias))],
+          },
+        }
+      }))
+    } catch (err) {
+      setDetectError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDetectingKeys(false)
+    }
+  }, [getEdges, getNodes, id, setNodes])
+
+  const onSourceChange = useCallback((nextSource: string) => {
+    update({ sourceColumn: nextSource })
+    if (nextSource) void detectKeys(nextSource, true)
+  }, [detectKeys, update])
 
   const hasInput = inputColumns.length > 0
   const readyFields = fields.filter((f) => f.alias.trim() && f.path.trim())
@@ -66,7 +186,7 @@ function JsonExtractNode({ id, data, selected }: Props) {
             <select
               className="node-select map-input"
               value={sourceColumn}
-              onChange={(e) => update({ sourceColumn: e.target.value })}
+              onChange={(e) => onSourceChange(e.target.value)}
               onClick={stopProp} onMouseDown={stopProp}
             >
               <option value="">— pick JSON column —</option>
@@ -76,6 +196,18 @@ function JsonExtractNode({ id, data, selected }: Props) {
             <input className="node-input" disabled placeholder="connect input first" />
           )}
         </div>
+
+        {detectError && (
+          <div className="node-hint" style={{ marginTop: 2, color: '#e36d6d' }}>
+            {detectError}
+          </div>
+        )}
+
+        {detectingKeys && (
+          <div className="node-hint" style={{ marginTop: 2 }}>
+            Detecting keys from sample rows...
+          </div>
+        )}
 
         <div className="node-body-row">
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 11.5, color: 'var(--text-dim)' }} onClick={stopProp} onMouseDown={stopProp}>
@@ -137,7 +269,7 @@ function JsonExtractNode({ id, data, selected }: Props) {
       </div>
 
       <div className="node-hint">
-        Use <code>sku</code> or <code>$.sku</code> for paths. Set a field type if you want numeric/boolean casting.
+        Pick a source column to auto-detect keys. You can still edit/add paths manually (for example <code>sku</code> or <code>$.sku</code>).
       </div>
 
       {isReady && outputColumns.length > 0 && (

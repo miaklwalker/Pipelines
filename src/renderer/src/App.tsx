@@ -23,7 +23,7 @@ import { buildNodeSQL } from './lib/sqlBuilder'
 import { propagateColumns } from './lib/graphUtils'
 import type {
   AppNode, AppEdge,
-  CSVNodeData, JSONNodeData, UnnestNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
+  CSVNodeData, JSONNodeData, UnnestNodeData, JsonExtractNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
   ConcatNodeData,
   UniqueNodeData, MapValueData, ConditionalOutputData,
@@ -380,6 +380,12 @@ export default function App() {
         setNodes((ns) => [...ns, {
           id: uuid(), type: 'unnest', position: spawnPosition(),
           data: { arrayColumn: '', itemColumn: 'item', inputColumns: [] } satisfies UnnestNodeData,
+        }])
+        break
+      case 'json-extract':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'json-extract', position: spawnPosition(),
+          data: { sourceColumn: 'item', keepAll: true, fields: [], inputColumns: [] } satisfies JsonExtractNodeData,
         }])
         break
       case 'join':
