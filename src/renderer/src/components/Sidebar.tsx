@@ -1,10 +1,46 @@
 import { SlidersHorizontal } from 'lucide-react'
 import { getAllDefs, type NodeDef, type PortDef } from '../nodes'
 
-// ── Port dot ──────────────────────────────────────────────────────────────────
-function Port({ type }: { type: PortDef['type'] }) {
-  const cls = type === 'conn' ? 'palette-port-conn' : type === 'row' ? 'palette-port-row' : 'palette-port-col'
-  return <div className={`palette-port ${cls}`} />
+// ── Port rail ─────────────────────────────────────────────────────────────────
+// Collapses a node's ports into one indicator per kind (row / col / conn) so the
+// card reads at a glance instead of showing a cluster of identical dots.
+// A count is shown only for genuinely-multiple row/conn ports (e.g. Join's two
+// row inputs); column handles are inherently per-column, so they never count.
+const PORT_ORDER: PortDef['type'][] = ['row', 'col', 'conn']
+const PORT_LABEL: Record<PortDef['type'], string> = { row: 'Row stream', col: 'Column', conn: 'DB connection' }
+
+function PortRail({ ports, side }: { ports: PortDef[]; side: 'in' | 'out' }) {
+  const counts = new Map<PortDef['type'], number>()
+  for (const p of ports) counts.set(p.type, (counts.get(p.type) ?? 0) + 1)
+  const kinds = PORT_ORDER.filter((k) => counts.has(k))
+
+  if (!kinds.length) {
+    return (
+      <div className="palette-ports">
+        <span className="palette-rail-dash" title={side === 'in' ? 'No inputs' : 'No outputs'}>–</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="palette-ports">
+      {kinds.map((k) => {
+        const n = counts.get(k)!
+        const showCount = n > 1 && k !== 'col'
+        const cls = k === 'conn' ? 'palette-port-conn' : k === 'row' ? 'palette-port-row' : 'palette-port-col'
+        const noun = side === 'in' ? 'input' : 'output'
+        const title = k === 'col'
+          ? `Per-column ${noun}s`
+          : `${PORT_LABEL[k]} ${noun}${showCount ? `s ×${n}` : ''}`
+        return (
+          <span className="palette-port-wrap" key={k} title={title}>
+            <span className={`palette-port ${cls}`} />
+            {showCount && <span className="palette-port-count">{n}</span>}
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 // ── Palette card ──────────────────────────────────────────────────────────────
@@ -13,10 +49,7 @@ function PaletteCard({ def, onClick }: { def: NodeDef<any>; onClick: () => void 
   const { Icon, name, desc, inputPorts, outputPorts, hasAdvanced } = def
   return (
     <button className="palette-card" onClick={onClick} title={desc}>
-      <div className="palette-ports">
-        {inputPorts.map((p, i) => <Port key={i} type={p.type} />)}
-        {inputPorts.length === 0 && <div style={{ width: 7 }} />}
-      </div>
+      <PortRail ports={inputPorts} side="in" />
 
       <div className="palette-body">
         <div className="palette-icon-wrap">
@@ -33,10 +66,7 @@ function PaletteCard({ def, onClick }: { def: NodeDef<any>; onClick: () => void 
         </div>
       </div>
 
-      <div className="palette-ports">
-        {outputPorts.map((p, i) => <Port key={i} type={p.type} />)}
-        {outputPorts.length === 0 && <div style={{ width: 7 }} />}
-      </div>
+      <PortRail ports={outputPorts} side="out" />
     </button>
   )
 }

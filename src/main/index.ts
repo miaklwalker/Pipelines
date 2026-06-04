@@ -141,6 +141,72 @@ ipcMain.handle('db:preview', async (_, { sql }: { sql: string }): Promise<Previe
   })
 })
 
+// Profile a SQL query — per-column data-quality stats for the Report node.
+ipcMain.handle('db:profile', async (_, { sql, columns, topN = 5 }: {
+  sql: string
+  columns: ColumnInfo[]
+  topN?: number
+}): Promise<ReportResult> => {
+  const cols = columns ?? []
+  const src = `(${sql})`
+  const quote = (name: string) => `"${name.replace(/"/g, '""')}"`
+  const num = (v: unknown): number => (v == null ? 0 : Number(v))
+  const str = (v: unknown): string | null =>
+    v == null ? null : v instanceof Date ? v.toISOString() : String(v)
+
+  const all = (q: string) => new Promise<Record<string, unknown>[]>((resolve, reject) => {
+    conn.all(q, (err, rows) => (err ? reject(new Error(err.message)) : resolve((rows ?? []) as Record<string, unknown>[])))
+  })
+
+  if (!cols.length) {
+    const totalRows = await all(`SELECT COUNT(*) AS __total FROM ${src} __profile`)
+    return { rowCount: num(totalRows[0]?.__total), columns: [] }
+  }
+
+  // One aggregate pass for non-null / distinct / min / max / blank-string counts.
+  // CAST(... AS VARCHAR) keeps MIN/MAX stringifiable and blank detection type-safe.
+  const aggParts = ['COUNT(*) AS __total']
+  cols.forEach((c, i) => {
+    const q = quote(c.name)
+    aggParts.push(`COUNT(${q}) AS "c${i}_nn"`)
+    aggParts.push(`COUNT(DISTINCT ${q}) AS "c${i}_dc"`)
+    aggParts.push(`CAST(MIN(${q}) AS VARCHAR) AS "c${i}_min"`)
+    aggParts.push(`CAST(MAX(${q}) AS VARCHAR) AS "c${i}_max"`)
+    aggParts.push(`COUNT(*) FILTER (WHERE CAST(${q} AS VARCHAR) = '') AS "c${i}_bl"`)
+  })
+  const aggRows = await all(`SELECT ${aggParts.join(', ')} FROM ${src} __profile`)
+  const agg = aggRows[0] ?? {}
+  const total = num(agg.__total)
+
+  // Top values: one grouped query per column, capped so wide tables stay responsive.
+  const TOP_COL_CAP = 40
+  const limit = Math.max(1, Math.min(20, topN))
+  const out = []
+  for (let i = 0; i < cols.length; i++) {
+    const c = cols[i]
+    const q = quote(c.name)
+    let top: { value: string | null; count: number }[] = []
+    if (i < TOP_COL_CAP && total > 0) {
+      const rows = await all(
+        `SELECT CAST(${q} AS VARCHAR) AS v, COUNT(*) AS n FROM ${src} __p ` +
+        `WHERE ${q} IS NOT NULL GROUP BY 1 ORDER BY n DESC, v LIMIT ${limit}`
+      )
+      top = rows.map((r) => ({ value: str(r.v), count: num(r.n) }))
+    }
+    out.push({
+      name: c.name,
+      type: c.type,
+      nonNull: num(agg[`c${i}_nn`]),
+      distinct: num(agg[`c${i}_dc`]),
+      min: str(agg[`c${i}_min`]),
+      max: str(agg[`c${i}_max`]),
+      blank: num(agg[`c${i}_bl`]),
+      top,
+    })
+  }
+  return { rowCount: total, columns: out }
+})
+
 // Export a SQL query result to a CSV file using DuckDB COPY
 ipcMain.handle('csv:export', async (_, {
   sql,
@@ -486,6 +552,22 @@ export interface PreviewResult {
 export interface ExportResult {
   filePath: string
   rowCount: number | null
+}
+
+export interface ReportColumnStat {
+  name: string
+  type: string
+  nonNull: number
+  distinct: number
+  min: string | null
+  max: string | null
+  blank: number
+  top: { value: string | null; count: number }[]
+}
+
+export interface ReportResult {
+  rowCount: number
+  columns: ReportColumnStat[]
 }
 
 interface DescribeRow {

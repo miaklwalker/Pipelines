@@ -1129,6 +1129,47 @@ describe('destination', () => {
     expect(sql).toContain('"r_id" AS "created_by"')
     expect(sql).toContain('NULL AS "updated_by"')
   })
+
+  it('resolves a column wired from a join input that is DESELECTED in the join (no blanking)', () => {
+    const brands = csvNode('n1', '/brands.csv', ['id', 'brand'])
+    const users = csvNode('n2', '/users.csv', ['id', 'name'])
+    // The join keeps only left `brand`; the right `id`/`name` (→ r_id/r_name) are excluded.
+    const join: AppNode = {
+      id: 'n3', type: 'join', position: pos,
+      data: {
+        joinType: 'INNER', leftKey: 'id', rightKey: 'id',
+        leftColumns: [{ name: 'id', type: 'TEXT' }, { name: 'brand', type: 'TEXT' }],
+        rightColumns: [{ name: 'id', type: 'TEXT' }, { name: 'name', type: 'TEXT' }],
+        columnSelection: [
+          { side: 'left',  name: 'id',    alias: 'id',    included: false },
+          { side: 'left',  name: 'brand', alias: 'brand', included: true  },
+          { side: 'right', name: 'id',    alias: 'r_id',  included: false },
+          { side: 'right', name: 'name',  alias: 'r_name', included: false },
+        ],
+      },
+    } as AppNode
+    const dest: AppNode = {
+      id: 'n4', type: 'destination', position: pos,
+      data: {
+        label: 'Out',
+        colMap: [
+          { sourceCol: '', destCol: 'brand', included: true },
+          { sourceCol: '', destCol: 'user_id', included: true },
+        ],
+      },
+    } as AppNode
+    const sql = buildNodeSQL('n4', [brands, users, join, dest], [
+      edge('e1', 'n1', 'n3', 'row-out', 'row-left'),
+      edge('e2', 'n2', 'n3', 'row-out', 'row-right'),
+      edge('e3', 'n3', 'n4', 'col-out-brand', 'col-in-custom-brand'),
+      // user_id wired from the users node directly — a column the join projects (r_id) but hides.
+      edge('e4', 'n2', 'n4', 'col-out-id', 'col-in-custom-user_id'),
+    ])!
+
+    expect(sql).toContain('"brand" AS "brand"')
+    expect(sql).toContain('"r_id" AS "user_id"')
+    expect(sql).not.toContain('NULL AS "user_id"')
+  })
 })
 
 // ── chained pipeline ──────────────────────────────────────────────────────────

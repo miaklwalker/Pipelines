@@ -5,6 +5,8 @@ export type CSVSelectResult = { filePath: string; fileName: string; columns: Col
 export type JSONSelectResult = { filePath: string; fileName: string; columns: ColumnInfo[] }
 export type PreviewResult   = { columns: string[]; rows: (string | null)[][]; rowCount: number | null }
 export type ExportResult    = { filePath: string; rowCount: number | null }
+export type ReportColumnStat = { name: string; type: string; nonNull: number; distinct: number; min: string | null; max: string | null; blank: number; top: { value: string | null; count: number }[] }
+export type ReportResult    = { rowCount: number; columns: ReportColumnStat[] }
 export type PgConfig        = { host: string; port: number; database: string; user: string; password: string; ssl: boolean }
 export type PgFetchResult   = { csvPath: string; columns: ColumnInfo[]; rowCount: number; fromCache?: boolean; cacheDate?: string }
 export type PgWriteResult   = { rowCount: number }
@@ -22,6 +24,9 @@ const api = {
     ipcRenderer.invoke('csv:pick-path', { defaultPath }),
   // DuckDB preview
   dbPreview: (sql: string): Promise<PreviewResult> => ipcRenderer.invoke('db:preview', { sql }),
+  // DuckDB profile — per-column data-quality stats for the Report node
+  dbProfile: (sql: string, columns: ColumnInfo[], topN?: number): Promise<ReportResult> =>
+    ipcRenderer.invoke('db:profile', { sql, columns, topN }),
   // Materialize
   materializeRun: (sql: string, existingPath?: string): Promise<MaterializeResult> => ipcRenderer.invoke('materialize:run', { sql, existingPath }),
   // Project

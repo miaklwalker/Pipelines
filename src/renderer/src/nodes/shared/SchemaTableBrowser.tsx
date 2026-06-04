@@ -44,14 +44,16 @@ export default function SchemaTableBrowser({
   return (
     <>
       <input
-        className="node-input schema-filter"
+        className="node-input schema-filter nodrag"
         placeholder={filterPlaceholder}
         value={filter}
         onChange={(e) => onFilterChange(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
       />
 
       {grouped.size > 0 && (
-        <div className="schema-browser">
+        <div className="schema-browser nowheel nodrag">
           {[...grouped.entries()].map(([schema, names]) => (
             <div key={schema} className="schema-group">
               <div className="schema-group-title">{schema}</div>
@@ -61,7 +63,8 @@ export default function SchemaTableBrowser({
                   <div
                     key={name}
                     className={`schema-table-row${isSel ? ' selected' : ''}`}
-                    onClick={() => onSelect(schema, name)}
+                    onClick={(e) => { e.stopPropagation(); onSelect(schema, name) }}
+                    onMouseDown={(e) => e.stopPropagation()}
                   >
                     <span className="schema-table-name">{name}</span>
                     {isSel && selectedStatus === 'ready' && (

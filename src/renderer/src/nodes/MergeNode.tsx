@@ -91,7 +91,7 @@ export const mergeDef: NodeDef<MergeNodeData> = {
     ],
   },
   inputPorts: [{ type: 'row' }, { type: 'row' }],
-  outputPorts: [{ type: 'row' }, { type: 'col' }, { type: 'col' }],
+  outputPorts: [{ type: 'row' }, { type: 'col' }],
   defaultData: () => ({ inputColumns: [] }),
   Component: Memoized,
 }

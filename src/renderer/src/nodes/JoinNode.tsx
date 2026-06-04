@@ -128,7 +128,7 @@ function JoinNode({ id, data, selected }: Props) {
 
       {/* ── Advanced: column output selection ──────────────────────────────────── */}
       {advancedOpen && columnSelection.length > 0 && (
-        <div className="join-col-panel" onMouseDown={stopProp}>
+        <div className="join-col-panel nowheel nodrag" onMouseDown={stopProp}>
 
           {/* Left columns */}
           <JoinColGroup

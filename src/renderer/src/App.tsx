@@ -19,7 +19,7 @@ import '@xyflow/react/dist/style.css'
 import { FolderOpen, Save, Play, Loader } from 'lucide-react'
 
 import { v4 as uuid } from 'uuid'
-import { buildNodeSQL } from './lib/sqlBuilder'
+import { buildNodeSQL, getNodeOutputColumns } from './lib/sqlBuilder'
 import { propagateColumns } from './lib/graphUtils'
 import type {
   AppNode, AppEdge,
@@ -31,7 +31,8 @@ import type {
   ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
   BrowseSchemaNodeData,
   MaterializeNodeData,
-  PreviewResult,
+  ReportNodeData,
+  PreviewResult, ReportResult,
 } from './lib/types'
 
 // Node registry — imports all nodes (registers them), exports NODE_TYPES
@@ -39,6 +40,7 @@ import { NODE_TYPES } from './nodes'
 
 import Sidebar         from './components/Sidebar'
 import PreviewDrawer   from './components/PreviewDrawer'
+import ReportDrawer    from './components/ReportDrawer'
 
 // ── Edge class based on handle type ──────────────────────────────────────────
 function edgeClass(connection: Connection | AppEdge): string {
@@ -108,6 +110,7 @@ function nodeLabel(node: AppNode | undefined): string {
   if (node.type === 'sort')               return 'Sort'
   if (node.type === 'limit')              return `Limit ${(node.data as LimitNodeData).count}`
   if (node.type === 'aggregate')          return 'Aggregate'
+  if (node.type === 'report')             return 'Report'
   if (node.type === 'connection')         return `DB: ${(node.data as ConnectionNodeData).config?.host || 'Connection'}`
   if (node.type === 'read-table')         return (node.data as ReadTableNodeData).tableName || 'Read Table'
   if (node.type === 'read-table-cached')  return (node.data as ReadTableCachedNodeData).tableName || 'Read (Cached)'
@@ -140,6 +143,11 @@ export default function App() {
   const [previewResult,  setPreviewResult]  = useState<PreviewResult | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError,   setPreviewError]   = useState<string | null>(null)
+
+  // Report state — Report node clicks open the report drawer instead of the preview
+  const [reportResult,  setReportResult]  = useState<ReportResult | null>(null)
+  const [reportLoading, setReportLoading] = useState(false)
+  const [reportError,   setReportError]   = useState<string | null>(null)
 
   // Pipeline execution state — maps nodeId → exec phase for visual feedback
   const [nodeExecState, setNodeExecState] = useState<Record<string, ExecPhase>>({})
@@ -310,8 +318,40 @@ export default function App() {
     }
   }, [setNodes])
 
+  // ── Node click → profile (Report node) ────────────────────────────────────
+  const profileReportNode = useCallback((node: AppNode) => {
+    const nodes = nodesRef.current
+    const edges = edgesRef.current
+    const sql = buildNodeSQL(node.id, nodes, edges)
+    setPreviewNodeId(node.id)
+    setReportResult(null)
+    setReportError(null)
+    if (!sql) {
+      setReportError('No complete pipeline yet — connect a row input.')
+      return
+    }
+    const cols = getNodeOutputColumns(node.id, nodes, edges)
+    setReportLoading(true)
+    window.api.dbProfile(sql, cols)
+      .then((result) => {
+        setReportResult(result)
+        setReportLoading(false)
+        setNodes((ns) => ns.map((n) =>
+          n.id === node.id ? { ...n, data: { ...n.data, result, status: 'done', error: undefined } } : n
+        ) as AppNode[])
+      })
+      .catch((err: Error) => {
+        setReportError(err.message ?? String(err))
+        setReportLoading(false)
+      })
+  }, [])
+
   // ── Node click → preview ──────────────────────────────────────────────────
   const onNodeClick = useCallback((_: React.MouseEvent, node: AppNode) => {
+    if (node.type === 'report') {
+      profileReportNode(node)
+      return
+    }
     const sql = buildNodeSQL(node.id, nodesRef.current, edgesRef.current)
     setPreviewNodeId(node.id)
     setPreviewResult(null)
@@ -350,7 +390,7 @@ export default function App() {
         setPreviewError(message)
         setPreviewLoading(false)
       })
-  }, [applyPreviewResult, refetchMissingCachedSource, showToast])
+  }, [applyPreviewResult, refetchMissingCachedSource, showToast, profileReportNode])
 
   // ── Node label for preview modal title ───────────────────────────────────
   // (also handles new node types)
@@ -476,6 +516,12 @@ export default function App() {
         setNodes((ns) => [...ns, {
           id: uuid(), type: 'aggregate', position: spawnPosition(),
           data: { groupBy: [], aggregations: [], inputColumns: [] } satisfies AggregateNodeData,
+        }])
+        break
+      case 'report':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'report', position: spawnPosition(),
+          data: { inputColumns: [], result: null, status: 'idle' } satisfies ReportNodeData,
         }])
         break
       case 'materialize':
@@ -758,13 +804,23 @@ export default function App() {
           )}
 
           {previewNodeId && (
-            <PreviewDrawer
-              nodeLabel={nodeLabel(nodes.find((n) => n.id === previewNodeId))}
-              result={previewResult}
-              loading={previewLoading}
-              error={previewError}
-              onClose={() => setPreviewNodeId(null)}
-            />
+            nodes.find((n) => n.id === previewNodeId)?.type === 'report' ? (
+              <ReportDrawer
+                nodeLabel={nodeLabel(nodes.find((n) => n.id === previewNodeId))}
+                result={reportResult}
+                loading={reportLoading}
+                error={reportError}
+                onClose={() => setPreviewNodeId(null)}
+              />
+            ) : (
+              <PreviewDrawer
+                nodeLabel={nodeLabel(nodes.find((n) => n.id === previewNodeId))}
+                result={previewResult}
+                loading={previewLoading}
+                error={previewError}
+                onClose={() => setPreviewNodeId(null)}
+              />
+            )
           )}
         </div>
       </div>

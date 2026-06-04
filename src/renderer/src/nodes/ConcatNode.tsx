@@ -87,7 +87,7 @@ export const concatDef: NodeDef<ConcatNodeData> = {
     ],
   },
   inputPorts: [{ type: 'row' }, { type: 'row' }],
-  outputPorts: [{ type: 'row' }, { type: 'col' }, { type: 'col' }],
+  outputPorts: [{ type: 'row' }, { type: 'col' }],
   defaultData: () => ({ inputColumns: [] }),
   Component: Memoized,
 }

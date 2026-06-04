@@ -247,7 +247,7 @@ function DestinationNode({ id, data, selected }: Props) {
                     onClick={stopProp}
                     onMouseDown={stopProp}
                   />
-                  <div style={{ maxHeight: 120, overflowY: 'auto', fontSize: 11 }}>
+                  <div className="nowheel nodrag" style={{ maxHeight: 120, overflowY: 'auto', fontSize: 11 }}>
                     {filteredTables.map((t) => {
                       const active = t.schema === dbSelectedSchema && t.name === dbSelectedTable
                       return (
@@ -291,7 +291,7 @@ function DestinationNode({ id, data, selected }: Props) {
 
       {/* ── Unified column list ─────────────────────────────────────────────── */}
       {colMap.length > 0 && (
-        <div className="column-list">
+        <div className="column-list nowheel nodrag">
           {/* Column header */}
           <div className="dest-list-header nodrag">
             <span style={{ width: 14, flexShrink: 0 }} />

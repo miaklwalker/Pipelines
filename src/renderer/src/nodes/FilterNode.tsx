@@ -185,7 +185,7 @@ export const filterDef: NodeDef<FilterNodeData> = {
     ],
   },
   inputPorts: [{ type: 'row' }],
-  outputPorts: [{ type: 'row' }, { type: 'row' }, { type: 'col' }, { type: 'col' }],
+  outputPorts: [{ type: 'row' }, { type: 'row' }, { type: 'col' }],
   defaultData: () => ({ condition: '', inputColumns: [] }),
   Component: Memoized,
 }

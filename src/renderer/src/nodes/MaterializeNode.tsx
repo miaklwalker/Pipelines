@@ -155,7 +155,7 @@ export const materializeDef: NodeDef<MaterializeNodeData> = {
     ],
   },
   inputPorts:  [{ type: 'row' }],
-  outputPorts: [{ type: 'row' }, { type: 'col' }, { type: 'col' }, { type: 'col' }],
+  outputPorts: [{ type: 'row' }, { type: 'col' }],
   defaultData: () => ({ parquetPath: null, columns: [], status: 'idle', rowCount: null }),
   Component: Memoized,
 }

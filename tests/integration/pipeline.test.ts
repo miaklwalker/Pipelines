@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import duckdb from 'duckdb'
 import { buildNodeSQL } from '../../src/renderer/src/lib/sqlBuilder'
+import { propagateColumns } from '../../src/renderer/src/lib/graphUtils'
 import { setup, teardown, type Fixtures } from '../fixtures/generate'
 import type { AppNode, AppEdge } from '../../src/renderer/src/lib/types'
 
@@ -414,6 +415,85 @@ describe('join', () => {
     ])
     expect(rows).toHaveLength(20)  // all employees preserved
     expect(Object.prototype.hasOwnProperty.call(rows[0], 'r_region')).toBe(true)
+  })
+})
+
+// ── Destination (multi-source anchor resolution) ──────────────────────────────
+
+describe('destination', () => {
+  // Helper: build a Destination node from a list of destination column names.
+  function destNode(id: string, destCols: string[]): AppNode {
+    return {
+      id, type: 'destination', position: pos,
+      data: { label: 'out', colMap: destCols.map((d) => ({ destCol: d, sourceCol: '', included: true, customExpr: '' })) },
+    } as AppNode
+  }
+
+  // orders(left) INNER JOIN employees(right) ON employee_id = id → 30 rows.
+  // The join keeps only the left `amount`; employees' columns (incl. `id`→`r_id`)
+  // are DESELECTED in the join. The destination then pulls `id`/`name` directly
+  // from the employees node — i.e. from columns the join projects but hides.
+  it('resolves columns wired from a join input that is deselected in the join', async () => {
+    const orders = csvNode('o', f.orders, ['order_id', 'employee_id', 'amount'])
+    const emps = csvNode('e', f.employees, ['id', 'name'])
+    const join: AppNode = {
+      id: 'j', type: 'join', position: pos,
+      data: {
+        joinType: 'INNER', leftKey: 'employee_id', rightKey: 'id',
+        leftColumns: [], rightColumns: [],
+        columnSelection: [
+          { side: 'left',  name: 'order_id',    alias: 'order_id',    included: false },
+          { side: 'left',  name: 'employee_id', alias: 'employee_id', included: false },
+          { side: 'left',  name: 'amount',      alias: 'amount',      included: true  },
+          { side: 'right', name: 'id',          alias: 'r_id',        included: false },
+          { side: 'right', name: 'name',        alias: 'r_name',      included: false },
+        ],
+      },
+    } as AppNode
+    const dest = destNode('d', ['amt', 'id', 'nm'])
+    const edges: AppEdge[] = [
+      edge('je1', 'o', 'j', 'row-out', 'row-left'),
+      edge('je2', 'e', 'j', 'row-out', 'row-right'),
+      edge('d1', 'j', 'd', 'col-out-amount', 'col-in-custom-amt'),
+      edge('d2', 'e', 'd', 'col-out-id', 'col-in-custom-id'),
+      edge('d3', 'e', 'd', 'col-out-name', 'col-in-custom-nm'),
+    ]
+    const nodes = propagateColumns([orders, emps, join, dest], edges)
+    const rows = await run('d', nodes, edges)
+    expect(rows).toHaveLength(30)
+    // Every column must carry real data — none silently blanked to NULL.
+    expect(rows.every((r) => r.amt !== null)).toBe(true)
+    expect(rows.every((r) => r.id !== null)).toBe(true)
+    expect(rows.every((r) => r.nm !== null)).toBe(true)
+  })
+
+  // A Destination that feeds a downstream join (which references the destination)
+  // must never recurse into that downstream node while picking its anchor — that
+  // previously caused "Maximum call stack size exceeded".
+  it('does not stack-overflow when a destination feeds a downstream join', () => {
+    const orders = csvNode('o', f.orders, ['order_id', 'employee_id', 'amount'])
+    const emps = csvNode('e', f.employees, ['id', 'name'])
+    const join: AppNode = {
+      id: 'j', type: 'join', position: pos,
+      data: { joinType: 'INNER', leftKey: 'employee_id', rightKey: 'id', leftColumns: [], rightColumns: [] },
+    } as AppNode
+    const dest = destNode('d', ['emp_id', 'amount'])
+    const regions = csvNode('r', f.regions, ['country', 'region'])
+    const join2: AppNode = {
+      id: 'j2', type: 'join', position: pos,
+      data: { joinType: 'INNER', leftKey: 'emp_id', rightKey: 'country', leftColumns: [], rightColumns: [] },
+    } as AppNode
+    const edges: AppEdge[] = [
+      edge('je1', 'o', 'j', 'row-out', 'row-left'),
+      edge('je2', 'e', 'j', 'row-out', 'row-right'),
+      edge('d1', 'j', 'd', 'col-out-employee_id', 'col-in-custom-emp_id'),
+      edge('d2', 'j', 'd', 'col-out-amount', 'col-in-custom-amount'),
+      // destination feeds the second join (downstream reference back to 'd')
+      edge('j2a', 'd', 'j2', 'row-out', 'row-left'),
+      edge('j2b', 'r', 'j2', 'row-out', 'row-right'),
+    ]
+    const nodes = propagateColumns([orders, emps, join, dest, regions, join2], edges)
+    expect(() => buildNodeSQL('d', nodes, edges)).not.toThrow()
   })
 })
 

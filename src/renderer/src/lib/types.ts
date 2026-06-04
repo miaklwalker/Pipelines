@@ -22,6 +22,31 @@ export interface ExportResult {
   rowCount: number | null
 }
 
+// ─── Report node (data profile) ──────────────────────────────────────────────
+
+export interface ReportColumnStat {
+  name: string
+  type: string
+  nonNull: number
+  distinct: number
+  min: string | null
+  max: string | null
+  blank: number
+  top: { value: string | null; count: number }[]
+}
+
+export interface ReportResult {
+  rowCount: number
+  columns: ReportColumnStat[]
+}
+
+export interface ReportNodeData extends Record<string, unknown> {
+  inputColumns: ColumnInfo[]
+  result: ReportResult | null
+  status: 'idle' | 'running' | 'done' | 'error'
+  error?: string
+}
+
 // ─── Node data shapes ────────────────────────────────────────────────────────
 
 export interface CSVNodeData extends Record<string, unknown> {
@@ -303,5 +328,6 @@ export type AppNode =
   | Node<ReadTableCachedNodeData, 'read-table-cached'>
   | Node<WriteTableNodeData,      'write-table'>
   | Node<BrowseSchemaNodeData,    'browse-schema'>
+  | Node<ReportNodeData,          'report'>
 
 export type AppEdge = Edge

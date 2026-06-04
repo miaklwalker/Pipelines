@@ -50,7 +50,8 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
 
     // ── Single row-in nodes ───────────────────────────────────────────────────
     if (node.type === 'transform' || node.type === 'csv-output' || node.type === 'filter'
-      || node.type === 'unique' || node.type === 'sort' || node.type === 'aggregate') {
+      || node.type === 'unique' || node.type === 'sort' || node.type === 'aggregate'
+      || node.type === 'report') {
       const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
       const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
       return { ...node, data: { ...node.data, inputColumns: inputCols } }

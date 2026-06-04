@@ -16,7 +16,7 @@ export function typeBadgeClass(type: string): string {
 export function ColumnList({ columns }: { columns: Array<ColumnInfo> }) {
     const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
     return (
-        <div className="column-list">
+        <div className="column-list nowheel nodrag">
             {columns.map((col) => (
                 <div key={col.name} className="column-row">
                     <span className="col-name" title={col.name}>{col.name}</span>

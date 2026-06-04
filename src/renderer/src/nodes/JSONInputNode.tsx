@@ -58,7 +58,7 @@ export const jsonInputDef: NodeDef<JSONNodeData> = {
     ],
   },
   inputPorts: [],
-  outputPorts: [{ type: 'row' }, { type: 'col' }, { type: 'col' }, { type: 'col' }],
+  outputPorts: [{ type: 'row' }, { type: 'col' }],
   defaultData: () => ({ fileName: '', filePath: '', columns: [] }),
   Component: Memoized,
 }

@@ -7,6 +7,7 @@ import type {
   ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
   BrowseSchemaNodeData, JoinColSelection,
   MaterializeNodeData,
+  ReportNodeData,
   ColumnInfo,
 } from './types'
 
@@ -156,6 +157,64 @@ function buildJoinSelectAll(d: JoinNodeData): string {
     .map((c) => `__r."${c.name}" AS "r_${c.name}"`)
     .join(', ')
   return rightCols ? `__l.*, ${rightCols}` : '__l.*, __r.*'
+}
+
+/**
+ * The column names a join exposes in `allColumns` mode — i.e. exactly what
+ * `buildJoinSelectAll` projects, IGNORING the `included` selection. This is the
+ * view a Destination anchor sees, so resolving a wired column must be matched
+ * against THIS set (not `getNodeOutputColumns`, which respects `included` and
+ * would wrongly hide deselected-but-still-projected columns like `r_id`).
+ */
+function getJoinAllColumns(d: JoinNodeData): ColumnInfo[] {
+  const sel = d.columnSelection ?? []
+  if (sel.length > 0) {
+    const rightAliases = new Set<string>()
+    const rightParts: ColumnInfo[] = []
+    for (const c of (d.rightColumns ?? [])) {
+      const entry = sel.find((s) => s.name === c.name && s.side === 'right')
+      const alias = entry?.alias || `r_${c.name}`
+      rightAliases.add(alias)
+      rightParts.push({ name: alias, type: c.type })
+    }
+    const leftParts = (d.leftColumns ?? [])
+      .filter((c) => !rightAliases.has(c.name))
+      .map((c) => ({ name: c.name, type: c.type }))
+    return [...leftParts, ...rightParts]
+  }
+  const leftCols  = (d.leftColumns ?? []).map((c) => ({ name: c.name, type: c.type }))
+  const rightCols = (d.rightColumns ?? []).map((c) => ({ name: `r_${c.name}`, type: c.type }))
+  return [...leftCols, ...rightCols]
+}
+
+/**
+ * Columns a node exposes when used as a Destination anchor (built with
+ * `allColumns: true`). Mirrors `buildNodeSQL(id, …, { allColumns: true })`:
+ * joins expose every underlying column, everything else matches its normal output.
+ */
+function getAnchorExposedColumns(nodeId: string, nodes: AppNode[], edges: AppEdge[]): ColumnInfo[] {
+  const node = nodes.find((n) => n.id === nodeId)
+  if (node?.type === 'join') return getJoinAllColumns(node.data as JoinNodeData)
+  return getNodeOutputColumns(nodeId, nodes, edges)
+}
+
+/** Set of node ids strictly downstream of `nodeId` (its descendants), via edge source→target. */
+function getDownstreamNodeIds(nodeId: string, edges: AppEdge[]): Set<string> {
+  const seen = new Set<string>()
+  let frontier = [nodeId]
+  while (frontier.length) {
+    const next: string[] = []
+    for (const sid of frontier) {
+      for (const e of edges) {
+        if (e.source === sid && !seen.has(e.target)) {
+          seen.add(e.target)
+          next.push(e.target)
+        }
+      }
+    }
+    frontier = next
+  }
+  return seen
 }
 
 /**
@@ -456,7 +515,9 @@ export function buildNodeSQL(
 
         const candidateSQL = buildNodeSQL(candidateId, nodes, edges, undefined, { allColumns: true })
         if (!candidateSQL) return
-        const candidateOutputs = new Set(getNodeOutputColumns(candidateId, nodes, edges).map((c) => c.name))
+        // Match against the columns the anchor SQL actually projects (allColumns view),
+        // so columns wired from join inputs that are deselected in the join still resolve.
+        const candidateOutputs = new Set(getAnchorExposedColumns(candidateId, nodes, edges).map((c) => c.name))
 
         let score = 0
         for (const m of included) {
@@ -489,16 +550,21 @@ export function buildNodeSQL(
       }
 
       // If wiring-based candidates cannot satisfy all anchor-dependent mappings,
-      // broaden the search to other nodes in this graph segment (e.g. downstream join).
+      // broaden the search to other nodes in this graph segment (e.g. a sibling
+      // join that shares an input with the destination). Exclude this node's
+      // DESCENDANTS — they depend on this destination, so anchoring on one would
+      // recurse infinitely (stack overflow) and never makes semantic sense.
       if (anchorRequired > 0 && bestScore < anchorRequired) {
+        const downstream = getDownstreamNodeIds(nodeId, edges)
         for (const candidate of nodes) {
+          if (downstream.has(candidate.id)) continue
           evaluateCandidate(candidate.id)
         }
       }
 
       const anchorOutputNames = new Set(
         anchorNodeId
-          ? getNodeOutputColumns(anchorNodeId, nodes, edges).map((c) => c.name)
+          ? getAnchorExposedColumns(anchorNodeId, nodes, edges).map((c) => c.name)
           : []
       )
 
@@ -539,6 +605,13 @@ export function buildNodeSQL(
     }
 
     case 'csv-output': {
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      if (!inputEdge) return null
+      return buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+    }
+
+    case 'report': {
+      // Pure pass-through tap: emits its input unchanged so it can sit mid-pipeline.
       const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
       if (!inputEdge) return null
       return buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
@@ -850,6 +923,9 @@ export function getNodeOutputColumns(
 
     case 'csv-output':
       return (node.data as CSVOutputNodeData).inputColumns ?? []
+
+    case 'report':
+      return (node.data as ReportNodeData).inputColumns ?? []
 
     case 'materialize':
       return (node.data as MaterializeNodeData).columns ?? []
