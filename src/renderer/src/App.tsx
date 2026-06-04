@@ -20,7 +20,7 @@ import { FolderOpen, Save, Play, Loader } from 'lucide-react'
 
 import { v4 as uuid } from 'uuid'
 import { buildNodeSQL, getNodeOutputColumns } from './lib/sqlBuilder'
-import { propagateColumns, computeNodeDisplayColors } from './lib/graphUtils'
+import { propagateColumns, computeNodeDisplayColors, getUpstreamNodeIds } from './lib/graphUtils'
 import { NodeColorProvider } from './contexts/NodeColorContext'
 import type {
   AppNode, AppEdge,
@@ -689,13 +689,30 @@ export default function App() {
     }
 
     setIsExecuting(true)
-    // Dim all nodes to 'idle' at the start of the run
+
+    // ── Build the full execution DAG ──────────────────────────────────────────
+    // Collect every node that feeds into any sink (via row-stream edges).
+    // These are the nodes that will visually participate in the run.
+    const execNodeIds = new Set<string>()
+    for (const sink of sinkNodes) {
+      execNodeIds.add(sink.id)
+      for (const id of getUpstreamNodeIds(sink.id, edgesRef.current)) {
+        execNodeIds.add(id)
+      }
+    }
+
+    // Pulse every node in the execution path; dim everything outside it
     const initState: Record<string, ExecPhase> = {}
-    nodesRef.current.forEach((n) => { initState[n.id] = 'idle' })
+    nodesRef.current.forEach((n) => {
+      initState[n.id] = execNodeIds.has(n.id) ? 'running' : 'idle'
+    })
     setNodeExecState(initState)
 
+    // ── Execute each sink sequentially ────────────────────────────────────────
     for (const sink of sinkNodes) {
-      setNodeExecState((s) => ({ ...s, [sink.id]: 'running' }))
+      // All nodes whose results feed into this specific sink
+      const sinkPath = new Set([sink.id, ...getUpstreamNodeIds(sink.id, edgesRef.current)])
+
       try {
         if (sink.type === 'write-table') {
           const d = sink.data as WriteTableNodeData
@@ -722,7 +739,7 @@ export default function App() {
             hasKnownPath
           )
           if (!result) {
-            // User cancelled the save dialog — reset this node to idle
+            // User cancelled the save dialog — pull this sink out of the run
             setNodeExecState((s) => ({ ...s, [sink.id]: 'idle' }))
             continue
           }
@@ -740,8 +757,15 @@ export default function App() {
           ))
           showToast(`✓ Exported ${result.rowCount?.toLocaleString() ?? '?'} rows`)
         }
-        setNodeExecState((s) => ({ ...s, [sink.id]: 'done' }))
+
+        // Success — light the full execution path green for this sink
+        setNodeExecState((s) => {
+          const next = { ...s }
+          for (const id of sinkPath) next[id] = 'done'
+          return next
+        })
       } catch (err) {
+        // Mark only the failed sink red; its upstream stays pulsing until cleared
         setNodeExecState((s) => ({ ...s, [sink.id]: 'error' }))
         showToast(`✗ ${err instanceof Error ? err.message : String(err)}`)
       }

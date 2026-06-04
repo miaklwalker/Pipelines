@@ -3,6 +3,34 @@
  * Nothing here imports React or React Flow — just data manipulation.
  */
 
+// ── Upstream node traversal ───────────────────────────────────────────────────
+/**
+ * Returns the set of node IDs that are upstream ancestors of `nodeId`
+ * through row-stream edges only (col-out-* and conn-out edges are skipped
+ * because they carry column values / DB connections, not row streams).
+ */
+export function getUpstreamNodeIds(nodeId: string, edges: AppEdge[]): Set<string> {
+  const rowEdges = edges.filter((e) => {
+    const sh = e.sourceHandle ?? ''
+    return !sh.startsWith('col-') && sh !== 'conn-out'
+  })
+
+  const visited = new Set<string>()
+  const queue = [nodeId]
+
+  while (queue.length) {
+    const current = queue.shift()!
+    for (const e of rowEdges) {
+      if (e.target === current && !visited.has(e.source)) {
+        visited.add(e.source)
+        queue.push(e.source)
+      }
+    }
+  }
+
+  return visited
+}
+
 // ── Node color propagation ─────────────────────────────────────────────────────
 /**
  * Propagates user-set colors downstream through row-stream edges.
