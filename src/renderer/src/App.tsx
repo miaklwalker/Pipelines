@@ -209,6 +209,8 @@ export default function App() {
   edgesRef.current = edges
   const filePathRef = useRef(currentFilePath)
   filePathRef.current = currentFilePath
+  const nodeUserColorsRef = useRef(nodeUserColors)
+  nodeUserColorsRef.current = nodeUserColors
 
   // ── React Flow handlers ───────────────────────────────────────────────────
   const onNodesChange: OnNodesChange<AppNode> = useCallback(
@@ -594,7 +596,12 @@ export default function App() {
   const saveProject = useCallback(async (forceDialog = false) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const replacer = (_: string, v: any) => (typeof v === 'bigint' ? Number(v) : v)
-    const payload = JSON.stringify({ version: 1, nodes: nodesRef.current, edges: edgesRef.current }, replacer, 2)
+    const payload = JSON.stringify({
+      version: 1,
+      nodes: nodesRef.current,
+      edges: edgesRef.current,
+      nodeUserColors: nodeUserColorsRef.current,
+    }, replacer, 2)
     const knownPath = filePathRef.current
 
     if (knownPath && !forceDialog) {
@@ -617,11 +624,17 @@ export default function App() {
     const loaded = await window.api.loadProject()
     if (!loaded) return
     try {
-      const parsed = JSON.parse(loaded.data) as { version: number; nodes: AppNode[]; edges: AppEdge[] }
+      const parsed = JSON.parse(loaded.data) as {
+        version: number
+        nodes: AppNode[]
+        edges: AppEdge[]
+        nodeUserColors?: Record<string, string>
+      }
       if (!parsed.nodes || !parsed.edges) throw new Error('Invalid file format')
       nodeCounter = parsed.nodes.length
       setNodes(parsed.nodes)
       setEdges(parsed.edges)
+      setNodeUserColors(parsed.nodeUserColors ?? {})
       setCurrentFilePath(loaded.path)
       showToast(`Pipeline loaded → ${loaded.path.split(/[/\\]/).pop()}`)
     } catch (err) {

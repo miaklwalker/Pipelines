@@ -6,16 +6,28 @@ import type { NodeDef } from '../registry'
 import { useNodeCollapse } from './PipelineNode'
 import { useNodeColors } from '../../contexts/NodeColorContext'
 
-// ── Preset colour palette ─────────────────────────────────────────────────────
+// ── Preset colour palette (16 colours, warm → cool spectrum) ─────────────────
 const PRESET_COLORS = [
+  // reds / pinks
   '#ef4444', // red
-  '#f97316', // orange
-  '#eab308', // yellow
-  '#22c55e', // green
-  '#06b6d4', // cyan
-  '#3b82f6', // blue
-  '#8b5cf6', // violet
+  '#f43f5e', // rose
   '#ec4899', // pink
+  '#d946ef', // fuchsia
+  // purples / blues
+  '#8b5cf6', // violet
+  '#6366f1', // indigo
+  '#3b82f6', // blue
+  '#0ea5e9', // sky
+  // greens / cyans
+  '#06b6d4', // cyan
+  '#14b8a6', // teal
+  '#22c55e', // green
+  '#84cc16', // lime
+  // yellows / oranges
+  '#eab308', // yellow
+  '#f59e0b', // amber
+  '#f97316', // orange
+  '#fb923c', // peach
 ]
 
 interface NodeMeta {

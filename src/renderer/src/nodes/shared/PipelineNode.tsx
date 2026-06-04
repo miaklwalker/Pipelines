@@ -14,7 +14,7 @@ import {
   type ReactNode,
   type CSSProperties,
 } from 'react'
-import { useNodeId } from '@xyflow/react'
+import { useNodeId, useReactFlow } from '@xyflow/react'
 import { useNodeColors } from '../../contexts/NodeColorContext'
 
 // ── Per-node collapse context ─────────────────────────────────────────────────
@@ -85,16 +85,33 @@ interface Props {
 }
 
 export function PipelineNode({ selected, children, title = 'Click to preview', className }: Props) {
-  // Collapse state — shared with NodeHeader (toggle button) and ColumnList (hide/show)
-  const [collapsed,     setCollapsed]     = useState(false)
+  // Collapse state — persisted in node data so it survives save/load.
+  // Reading via getNode() is safe here because React Flow re-renders nodes
+  // when their data changes, so `collapsed` is always fresh.
+  const id = useNodeId() ?? ''
+  const { getNode, setNodes } = useReactFlow()
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const collapsed = ((getNode(id)?.data ?? {}) as any).columnsCollapsed ?? false
+
+  const toggle = useCallback(() => {
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === id
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ? { ...n, data: { ...n.data, columnsCollapsed: !(n.data as any).columnsCollapsed } }
+          : n
+      )
+    )
+  }, [id, setNodes])
+
+  // hasColumnList is transient UI — no need to persist
   const [hasColumnList, setHasColumnList] = useState(false)
 
-  const toggle     = useCallback(() => setCollapsed((c) => !c), [])
   const register   = useCallback(() => setHasColumnList(true),  [])
   const unregister = useCallback(() => setHasColumnList(false), [])
 
   // Color accent — read from the app-level color context
-  const id     = useNodeId() ?? ''
   const { displayColors } = useNodeColors()
   const colors = displayColors[id] ?? []
 
