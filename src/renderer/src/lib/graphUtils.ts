@@ -2,6 +2,66 @@
  * Pure graph-traversal utilities shared between App.tsx and node components.
  * Nothing here imports React or React Flow — just data manipulation.
  */
+
+// ── Node color propagation ─────────────────────────────────────────────────────
+/**
+ * Propagates user-set colors downstream through row-stream edges.
+ *
+ * Rules:
+ *  - A node with an explicit user color is a "color source" — its color resets
+ *    any upstream lineage and propagates to children as a single color.
+ *  - A node with no explicit color inherits the *union* of all upstream source
+ *    colors (one per distinct colored ancestor path).  When two differently-
+ *    colored paths converge (e.g. a Join), the node receives both colors and
+ *    displays them as a gradient.
+ *  - Only row-stream edges carry color (col-out-* and conn-out edges do not).
+ */
+export function computeNodeDisplayColors(
+  nodes: AppNode[],
+  edges: AppEdge[],
+  userColors: Record<string, string>,
+): Record<string, string[]> {
+  // Only row-stream edges propagate colour
+  const rowEdges = edges.filter((e) => {
+    const sh = e.sourceHandle ?? ''
+    return !sh.startsWith('col-') && sh !== 'conn-out'
+  })
+
+  // Build adjacency + in-degree for topological sort (Kahn's algorithm)
+  const children = new Map<string, string[]>(nodes.map((n) => [n.id, []]))
+  const inDegree  = new Map<string, number>(nodes.map((n) => [n.id, 0]))
+
+  for (const e of rowEdges) {
+    children.get(e.source)?.push(e.target)
+    inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1)
+  }
+
+  const queue     = nodes.filter((n) => (inDegree.get(n.id) ?? 0) === 0).map((n) => n.id)
+  const colorSets = new Map<string, string[]>()
+
+  while (queue.length) {
+    const id = queue.shift()!
+
+    if (userColors[id]) {
+      // Explicit color — resets the lineage, only this color propagates forward
+      colorSets.set(id, [userColors[id]])
+    } else {
+      // Inherit from all row-edge parents, deduplicated, order-stable
+      const upstream = rowEdges
+        .filter((e) => e.target === id)
+        .flatMap((e) => colorSets.get(e.source) ?? [])
+      colorSets.set(id, [...new Set(upstream)])
+    }
+
+    for (const child of children.get(id) ?? []) {
+      const deg = (inDegree.get(child) ?? 1) - 1
+      inDegree.set(child, deg)
+      if (deg === 0) queue.push(child)
+    }
+  }
+
+  return Object.fromEntries(colorSets)
+}
 import { getNodeOutputColumns } from './sqlBuilder'
 import type {
   AppNode, AppEdge,

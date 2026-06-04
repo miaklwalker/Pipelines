@@ -20,7 +20,8 @@ import { FolderOpen, Save, Play, Loader } from 'lucide-react'
 
 import { v4 as uuid } from 'uuid'
 import { buildNodeSQL, getNodeOutputColumns } from './lib/sqlBuilder'
-import { propagateColumns } from './lib/graphUtils'
+import { propagateColumns, computeNodeDisplayColors } from './lib/graphUtils'
+import { NodeColorProvider } from './contexts/NodeColorContext'
 import type {
   AppNode, AppEdge,
   CSVNodeData, JSONNodeData, UnnestNodeData, JsonExtractNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
@@ -152,6 +153,27 @@ export default function App() {
   // Pipeline execution state — maps nodeId → exec phase for visual feedback
   const [nodeExecState, setNodeExecState] = useState<Record<string, ExecPhase>>({})
   const [isExecuting, setIsExecuting] = useState(false)
+
+  // Node color coding — user-set colors + computed propagated colors
+  const [nodeUserColors, setNodeUserColors] = useState<Record<string, string>>({})
+  const setUserColor = useCallback((nodeId: string, color: string | null) => {
+    setNodeUserColors((prev) => {
+      if (color === null) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { [nodeId]: _removed, ...rest } = prev
+        return rest
+      }
+      return { ...prev, [nodeId]: color }
+    })
+  }, [])
+  const displayColors = useMemo(
+    () => computeNodeDisplayColors(nodes, edges, nodeUserColors),
+    [nodes, edges, nodeUserColors],
+  )
+  const colorContextValue = useMemo(
+    () => ({ displayColors, userColors: nodeUserColors, setUserColor }),
+    [displayColors, nodeUserColors, setUserColor],
+  )
 
   // ReactFlow instance — used to convert screen coords to flow coords for spawning
   const rfRef = useRef<ReactFlowInstance<AppNode, AppEdge> | null>(null)
@@ -719,6 +741,7 @@ export default function App() {
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
+    <NodeColorProvider value={colorContextValue}>
     <div className="app-layout">
       {/* Top bar */}
       <header className="topbar">
@@ -825,5 +848,6 @@ export default function App() {
         </div>
       </div>
     </div>
+    </NodeColorProvider>
   )
 }

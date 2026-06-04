@@ -1,7 +1,9 @@
 import { type ColumnInfo } from '../../lib/types'
-import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Handle, Position } from '@xyflow/react'
 import { colHandle } from './handles'
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
+import { useNodeCollapse } from './PipelineNode'
+
 export function typeBadgeClass(type: string): string {
     const t = type.toLowerCase()
     if (t === 'integer') return 'type-integer'
@@ -15,6 +17,21 @@ export function typeBadgeClass(type: string): string {
 
 export function ColumnList({ columns }: { columns: Array<ColumnInfo> }) {
     const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
+    const { collapsed, register, unregister } = useNodeCollapse()
+
+    // Tell the parent PipelineNode (via context) whether there are columns,
+    // so NodeHeader knows whether to show the collapse toggle button.
+    const hasColumns = columns.length > 0
+    useEffect(() => {
+        if (hasColumns) {
+            register()
+            return unregister
+        }
+        return undefined
+    }, [hasColumns, register, unregister])
+
+    if (collapsed) return null
+
     return (
         <div className="column-list nowheel nodrag">
             {columns.map((col) => (

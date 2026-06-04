@@ -1,8 +1,22 @@
-import { useState, useCallback } from 'react'
-import { HelpCircle, SlidersHorizontal, X, Pencil } from 'lucide-react'
+import { useState, useCallback, useRef, useEffect } from 'react'
+import { HelpCircle, SlidersHorizontal, X, Pencil, ChevronDown, ChevronRight, Palette } from 'lucide-react'
 import { useReactFlow } from '@xyflow/react'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import type { NodeDef } from '../registry'
+import { useNodeCollapse } from './PipelineNode'
+import { useNodeColors } from '../../contexts/NodeColorContext'
+
+// ── Preset colour palette ─────────────────────────────────────────────────────
+const PRESET_COLORS = [
+  '#ef4444', // red
+  '#f97316', // orange
+  '#eab308', // yellow
+  '#22c55e', // green
+  '#06b6d4', // cyan
+  '#3b82f6', // blue
+  '#8b5cf6', // violet
+  '#ec4899', // pink
+]
 
 interface NodeMeta {
   nodeLabel?: string
@@ -21,13 +35,35 @@ interface Props {
 }
 
 export default function NodeHeader({ def, id, subtitle, advancedOpen, onAdvancedToggle }: Props) {
-  const [helpOpen, setHelpOpen] = useState(false)
-  const [editOpen, setEditOpen] = useState(false)
+  const [helpOpen,        setHelpOpen]        = useState(false)
+  const [editOpen,        setEditOpen]        = useState(false)
+  const [colorPickerOpen, setColorPickerOpen] = useState(false)
+
   const { Icon, name, help, hasAdvanced } = def
   const { getNode, setNodes } = useReactFlow()
 
-  const meta = (getNode(id)?.data ?? {}) as NodeMeta
+  const meta         = (getNode(id)?.data ?? {}) as NodeMeta
   const displayTitle = meta.nodeLabel || name
+
+  // Collapse context — shared with ColumnList via PipelineNode
+  const { collapsed, hasColumnList, toggle } = useNodeCollapse()
+
+  // Color context — app-level
+  const { userColors, setUserColor } = useNodeColors()
+  const userColor = userColors[id] ?? null
+
+  // Close picker when clicking outside
+  const pickerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!colorPickerOpen) return
+    const handler = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setColorPickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [colorPickerOpen])
 
   const updateMeta = useCallback((patch: Partial<NodeMeta>) => {
     setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n)))
@@ -37,18 +73,32 @@ export default function NodeHeader({ def, id, subtitle, advancedOpen, onAdvanced
     e.stopPropagation()
     setHelpOpen((v) => !v)
     setEditOpen(false)
+    setColorPickerOpen(false)
   }, [])
 
   const toggleEdit = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     setEditOpen((v) => !v)
     setHelpOpen(false)
+    setColorPickerOpen(false)
+  }, [])
+
+  const toggleColorPicker = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    setColorPickerOpen((v) => !v)
+    setHelpOpen(false)
+    setEditOpen(false)
   }, [])
 
   const handleGear = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     onAdvancedToggle?.()
   }, [onAdvancedToggle])
+
+  const handleCollapse = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    toggle()
+  }, [toggle])
 
   const stopProp = useCallback((e: React.MouseEvent | React.PointerEvent) => e.stopPropagation(), [])
 
@@ -62,7 +112,31 @@ export default function NodeHeader({ def, id, subtitle, advancedOpen, onAdvanced
           <div className="node-header-title">{displayTitle}</div>
           <div className="node-header-sub">{subtitle}</div>
         </div>
+
         <div className="node-header-actions">
+          {/* Collapse columns toggle — only shown when a ColumnList is present */}
+          {hasColumnList && (
+            <button
+              className={`node-icon-btn${collapsed ? ' node-icon-btn-active' : ''}`}
+              onClick={handleCollapse}
+              title={collapsed ? 'Expand columns' : 'Collapse columns'}
+            >
+              {collapsed
+                ? <ChevronRight size={11} strokeWidth={2} />
+                : <ChevronDown  size={11} strokeWidth={2} />}
+            </button>
+          )}
+
+          {/* Colour picker */}
+          <button
+            className={`node-icon-btn${(colorPickerOpen || userColor) ? ' node-icon-btn-active' : ''}`}
+            onClick={toggleColorPicker}
+            title="Color code this node"
+            style={userColor ? { color: userColor } : undefined}
+          >
+            <Palette size={11} strokeWidth={1.75} />
+          </button>
+
           {hasAdvanced && (
             <button
               className={`node-icon-btn${advancedOpen ? ' node-icon-btn-active' : ''}`}
@@ -89,6 +163,46 @@ export default function NodeHeader({ def, id, subtitle, advancedOpen, onAdvanced
         </div>
       </div>
 
+      {/* ── Colour picker popover ────────────────────────────────────────── */}
+      {colorPickerOpen && (
+        <div
+          ref={pickerRef}
+          className="node-color-picker"
+          onClick={stopProp}
+          onMouseDown={stopProp}
+          onPointerDown={stopProp}
+        >
+          {PRESET_COLORS.map((color) => (
+            <button
+              key={color}
+              className={`color-swatch${userColor === color ? ' color-swatch-active' : ''}`}
+              style={{ background: color }}
+              onClick={(e) => {
+                e.stopPropagation()
+                // Toggle: clicking the active colour clears it
+                setUserColor(id, userColor === color ? null : color)
+                setColorPickerOpen(false)
+              }}
+              title={color}
+            />
+          ))}
+          {userColor && (
+            <button
+              className="color-swatch color-swatch-clear"
+              onClick={(e) => {
+                e.stopPropagation()
+                setUserColor(id, null)
+                setColorPickerOpen(false)
+              }}
+              title="Clear color"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Metadata panels ─────────────────────────────────────────────── */}
       {meta.nodeDescription && !editOpen && (
         <div className="node-meta-description">{meta.nodeDescription}</div>
       )}

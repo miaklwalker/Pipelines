@@ -251,6 +251,65 @@ html, body, #root {
 .type-timestamp{ background: rgba(6,182,212,0.15);  color: #22d3ee; }
 .type-default  { background: rgba(100,116,139,0.2); color: #94a3b8; }
 
+/* ── Node colour accent ─────────────────────────────────────────────── */
+/* 3-px gradient stripe rendered at the very top of the node card.
+   Solid for a single source colour, gradient when paths merge. */
+.node-accent-stripe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 10px 10px 0 0;
+  pointer-events: none;
+  z-index: 2;
+}
+/* When the stripe is present, apply a matching translucent tint to the header
+   via the CSS custom property set by PipelineNode. */
+.pipeline-node:has(.node-accent-stripe) .node-header {
+  background: var(--node-accent-hdr, var(--bg-node-hdr));
+}
+
+/* ── Colour picker popover ──────────────────────────────────────────── */
+.node-header-actions { position: relative; }  /* positioning context for picker */
+.node-color-picker {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 200;
+  background: var(--bg-node);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  width: 127px;   /* 4 swatches × 24px + gaps */
+  box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+}
+.color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+}
+.color-swatch:hover { transform: scale(1.2); }
+.color-swatch-active { border-color: #fff !important; }
+.color-swatch-clear {
+  background: rgba(255,255,255,0.07) !important;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-color: var(--border) !important;
+}
+.color-swatch-clear:hover { color: var(--red); background: rgba(239,68,68,0.12) !important; }
+
 /* ── Node body content ──────────────────────────────── */
 .node-body { padding: 10px 14px; }
 .node-body-row {
