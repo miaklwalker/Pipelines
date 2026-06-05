@@ -892,8 +892,9 @@ export default function App() {
           if (!inputEdge) throw new Error('No data input connected to Write Table')
           const sql = buildNodeSQL(inputEdge.source, nodesRef.current, edgesRef.current, inputEdge.sourceHandle ?? undefined)
           if (!sql) throw new Error('Could not build upstream SQL for Write Table')
-          const result = await window.api.pgWrite(d.resolvedConfig!, sql, d.tableName, d.writeMode)
-          showToast(`✓ Wrote ${result.rowCount.toLocaleString()} rows → ${d.tableName}`)
+          const qualifiedTable = d.dbSelectedSchema ? `${d.dbSelectedSchema}.${d.tableName}` : d.tableName
+          const result = await window.api.pgWrite(d.resolvedConfig!, sql, qualifiedTable, d.writeMode)
+          showToast(`✓ Wrote ${result.rowCount.toLocaleString()} rows → ${qualifiedTable}`)
         } else if (sink.type === 'csv-output') {
           const d = sink.data as CSVOutputNodeData
           const sql = buildNodeSQL(sink.id, nodesRef.current, edgesRef.current)
