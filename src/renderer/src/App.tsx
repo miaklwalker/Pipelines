@@ -16,12 +16,13 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { FolderOpen, Save, Play, Loader } from 'lucide-react'
+import { FolderOpen, Save, Play, Loader, RefreshCw } from 'lucide-react'
 
 import { v4 as uuid } from 'uuid'
 import { buildNodeSQL, getNodeOutputColumns } from './lib/sqlBuilder'
-import { propagateColumns, computeNodeDisplayColors, getUpstreamNodeIds } from './lib/graphUtils'
+import { propagateColumns, computeNodeDisplayColors, getUpstreamNodeIds, getDownstreamNodeIds } from './lib/graphUtils'
 import { NodeColorProvider } from './contexts/NodeColorContext'
+import { PipelineActionsProvider } from './contexts/PipelineActionsContext'
 import type {
   AppNode, AppEdge,
   CSVNodeData, JSONNodeData, UnnestNodeData, JsonExtractNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
@@ -154,6 +155,16 @@ export default function App() {
   // Pipeline execution state — maps nodeId → exec phase for visual feedback
   const [nodeExecState, setNodeExecState] = useState<Record<string, ExecPhase>>({})
   const [isExecuting, setIsExecuting] = useState(false)
+  const isExecutingRef = useRef(false)
+
+  // Full execution mode — re-materializes Parquet nodes and re-fetches cached DB nodes before running
+  const [fullExecution, setFullExecution] = useState(false)
+  const fullExecutionRef = useRef(fullExecution)
+  fullExecutionRef.current = fullExecution
+
+  // Queued downstream cascade — set by node components after a manual refresh,
+  // processed in a useEffect so React state is committed before sink SQL is built
+  const [pendingCascadeFrom, setPendingCascadeFrom] = useState<string | null>(null)
 
   // Node color coding — user-set colors + computed propagated colors
   const [nodeUserColors, setNodeUserColors] = useState<Record<string, string>>({})
@@ -681,13 +692,20 @@ export default function App() {
   }, [nodes, nodeExecState])
 
   // ── Execute pipeline — runs all write-table / csv-output sinks in order ───────
-  const executePipeline = useCallback(async () => {
-    const sinkNodes = nodesRef.current.filter((n) =>
-      (n.type === 'write-table' && (n.data as WriteTableNodeData).resolvedConfig && (n.data as WriteTableNodeData).tableName) ||
+  const executePipeline = useCallback(async (opts?: { targetSinkIds?: Set<string> }) => {
+    if (isExecutingRef.current) return
+    isExecutingRef.current = true
+
+    const isSink = (n: AppNode) =>
+      (n.type === 'write-table' && !!(n.data as WriteTableNodeData).resolvedConfig && !!(n.data as WriteTableNodeData).tableName) ||
       n.type === 'csv-output'
+
+    const sinkNodes = nodesRef.current.filter((n) =>
+      isSink(n) && (!opts?.targetSinkIds || opts.targetSinkIds.has(n.id))
     )
     if (!sinkNodes.length) {
-      showToast('No output nodes — add a Write Table or CSV Export node')
+      if (!opts?.targetSinkIds) showToast('No output nodes — add a Write Table or CSV Export node')
+      isExecutingRef.current = false
       return
     }
 
@@ -710,6 +728,86 @@ export default function App() {
       initState[n.id] = execNodeIds.has(n.id) ? 'running' : 'idle'
     })
     setNodeExecState(initState)
+
+    // ── Full execution pre-pass: re-materialize + re-fetch cached nodes ───────
+    // Only runs when fullExecution is on AND this is a top-level run (not cascade).
+    if (fullExecutionRef.current && !opts?.targetSinkIds) {
+      const refreshIds = [...execNodeIds].filter((id) => {
+        const n = nodesRef.current.find((n) => n.id === id)
+        return n?.type === 'materialize' || n?.type === 'read-table-cached'
+      })
+
+      if (refreshIds.length) {
+        showToast(`↻ Full Run — refreshing ${refreshIds.length} cached node${refreshIds.length > 1 ? 's' : ''}…`)
+
+        // Sort upstream-first so cascading materializes get fresh inputs
+        const sortedRefreshIds = [...refreshIds].sort((a, b) => {
+          const upA = getUpstreamNodeIds(a, edgesRef.current)
+          if (upA.has(b)) return 1
+          const upB = getUpstreamNodeIds(b, edgesRef.current)
+          if (upB.has(a)) return -1
+          return 0
+        })
+
+        for (const nodeId of sortedRefreshIds) {
+          const node = nodesRef.current.find((n) => n.id === nodeId)
+          if (!node) continue
+
+          if (node.type === 'materialize') {
+            const d = node.data as MaterializeNodeData
+            const inputEdge = edgesRef.current.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+            if (!inputEdge) continue
+            const sql = buildNodeSQL(inputEdge.source, nodesRef.current, edgesRef.current, inputEdge.sourceHandle ?? undefined)
+            if (!sql) continue
+            try {
+              const result = await window.api.materializeRun(sql, d.parquetPath ?? undefined)
+              const preview = await window.api.dbPreview(`SELECT COUNT(*) AS __cnt FROM read_parquet('${result.parquetPath.replace(/'/g, "''")}')`)
+              const cnt = preview.rows[0]?.[0]
+              const updatedData: MaterializeNodeData = {
+                ...d, parquetPath: result.parquetPath, columns: result.columns,
+                status: 'done', rowCount: cnt != null ? Number(cnt) : null, error: undefined,
+              }
+              const updatedNodes = propagateColumns(
+                nodesRef.current.map((n) => n.id === nodeId ? { ...n, data: updatedData } : n) as AppNode[],
+                edgesRef.current
+              )
+              nodesRef.current = updatedNodes
+              setNodes(updatedNodes)
+            } catch (err) {
+              setNodeExecState((s) => ({ ...s, [nodeId]: 'error' }))
+              showToast(`✗ Re-materialize failed: ${err instanceof Error ? err.message : String(err)}`)
+            }
+
+          } else if (node.type === 'read-table-cached') {
+            const d = node.data as ReadTableCachedNodeData
+            if (!d.resolvedConfig) continue
+            const tableQuery = d.tableName
+              ? `SELECT * FROM ${d.dbSelectedSchema ? `${quoteIdent(d.dbSelectedSchema)}.` : ''}${quoteIdent(d.tableName)}`
+              : ''
+            const query = (d.readMode === 'table' ? tableQuery : d.customSQL) || ''
+            if (!query) continue
+            try {
+              //@ts-ignore
+              const result = await window.api.pgFetchCached(d.resolvedConfig, query, true)
+              const updatedData: ReadTableCachedNodeData = {
+                ...d, csvPath: result.csvPath, columns: result.columns,
+                rowCount: result.rowCount, status: 'ready',
+                cacheDate: result.cacheDate ?? new Date().toISOString(), error: undefined,
+              }
+              const updatedNodes = propagateColumns(
+                nodesRef.current.map((n) => n.id === nodeId ? { ...n, data: updatedData } : n) as AppNode[],
+                edgesRef.current
+              )
+              nodesRef.current = updatedNodes
+              setNodes(updatedNodes)
+            } catch (err) {
+              setNodeExecState((s) => ({ ...s, [nodeId]: 'error' }))
+              showToast(`✗ Re-fetch failed (${(d.tableName || 'cache')}): ${err instanceof Error ? err.message : String(err)}`)
+            }
+          }
+        }
+      }
+    }
 
     // ── Order sinks by sequence edges (topological sort) ─────────────────────
     // seq-out → seq-in edges mean "this node must complete before the target".
@@ -820,12 +918,46 @@ export default function App() {
     }
 
     setIsExecuting(false)
+    isExecutingRef.current = false
     // Hold the done/error state for 2.5 s so the user can see the result, then clear
     setTimeout(() => setNodeExecState({}), 2500)
   }, [showToast])
 
+  // ── Cascade downstream sinks after a node manually refreshes ─────────────
+  // Called from node components (Materialize, ReadTableCached) via context.
+  // Uses a queued state so React commits the refreshed node data before the
+  // sink SQL is built (avoids stale parquetPath / csvPath in buildNodeSQL).
+  const runDownstreamSinks = useCallback((nodeId: string) => {
+    if (!isExecutingRef.current) {
+      setPendingCascadeFrom(nodeId)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!pendingCascadeFrom) return
+    setPendingCascadeFrom(null)
+    const downstreamIds = getDownstreamNodeIds(pendingCascadeFrom, edgesRef.current)
+    const targetSinkIds = new Set(
+      nodesRef.current
+        .filter((n) => downstreamIds.has(n.id) && (
+          (n.type === 'write-table' && !!(n.data as WriteTableNodeData).resolvedConfig && !!(n.data as WriteTableNodeData).tableName) ||
+          n.type === 'csv-output'
+        ))
+        .map((n) => n.id)
+    )
+    if (targetSinkIds.size > 0) {
+      executePipeline({ targetSinkIds })
+    }
+  }, [pendingCascadeFrom, executePipeline])
+
+  const pipelineActionsValue = useMemo(
+    () => ({ runDownstreamSinks }),
+    [runDownstreamSinks]
+  )
+
   // ─────────────────────────────────────────────────────────────────────────
   return (
+    <PipelineActionsProvider value={pipelineActionsValue}>
     <NodeColorProvider value={colorContextValue}>
     <div className="app-layout">
       {/* Top bar */}
@@ -848,14 +980,27 @@ export default function App() {
             {currentFilePath ? 'Save' : 'Save…'}
           </button>
           <button
+            className={`topbar-btn${fullExecution ? ' topbar-btn-full-active' : ''}`}
+            onClick={() => setFullExecution((f) => !f)}
+            disabled={isExecuting}
+            title={fullExecution
+              ? 'Full Execution ON — re-materializes Parquet nodes and re-fetches cached DB nodes before running. Click to disable.'
+              : 'Full Execution OFF — click to enable (re-runs all cached/materialized nodes on each run)'}
+          >
+            <RefreshCw size={11} strokeWidth={2} />
+            Full
+          </button>
+          <button
             className="topbar-btn topbar-btn-run"
-            onClick={executePipeline}
+            onClick={() => executePipeline()}
             disabled={isExecuting || nodes.length === 0}
-            title="Run all output nodes (Write Table + CSV Export)"
+            title={fullExecution
+              ? 'Full Run — re-materializes + re-fetches cached nodes, then runs all output nodes'
+              : 'Run all output nodes (Write Table + CSV Export)'}
           >
             {isExecuting
               ? <><Loader size={13} strokeWidth={1.75} className="spin" />Running…</>
-              : <><Play size={13} strokeWidth={1.75} />Run</>}
+              : <><Play size={13} strokeWidth={1.75} />{fullExecution ? 'Full Run' : 'Run'}</>}
           </button>
         </div>
       </header>
@@ -934,5 +1079,6 @@ export default function App() {
       </div>
     </div>
     </NodeColorProvider>
+    </PipelineActionsProvider>
   )
 }

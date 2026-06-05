@@ -10,6 +10,7 @@ import { rowHandle, colHandle, connHandle, TOP_RIGHT_ROW_OUT } from './shared/ha
 import { typeBadgeClass } from './CSVInputNode'
 import { ColumnList } from './shared/columns'
 import SchemaTableBrowser from './shared/SchemaTableBrowser'
+import { usePipelineActions } from '../contexts/PipelineActionsContext'
 
 function quoteIdent(v: string): string {
   return `"${v.replace(/"/g, '""')}"`
@@ -26,6 +27,8 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
     dbTables = [], dbSelectedSchema = null, dbSelectedTable = null, dbStatus = 'idle', dbError,
   } = data
   const [dbFilter, setDbFilter] = useState('')
+
+  const { runDownstreamSinks } = usePipelineActions()
 
   const update = useCallback(
     (patch: Partial<ReadTableCachedNodeData>) =>
@@ -68,10 +71,11 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
         )
         return propagateColumns(updated as AppNode[], getEdges() as ReturnType<typeof getEdges>)
       })
+      runDownstreamSinks(id)
     } catch (err) {
       update({ status: 'error', error: String(err) })
     }
-  }, [id, resolvedConfig, query, update, setNodes, getEdges])
+  }, [id, resolvedConfig, query, update, setNodes, getEdges, runDownstreamSinks])
 
   const handleFetch = useCallback((e: React.MouseEvent) => { e.stopPropagation(); doFetch(false) }, [doFetch])
   const handleRefresh = useCallback((e: React.MouseEvent) => { e.stopPropagation(); doFetch(true) }, [doFetch])

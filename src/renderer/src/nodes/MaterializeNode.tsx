@@ -8,6 +8,7 @@ import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, HEADER_ROW_IN, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
+import { usePipelineActions } from '../contexts/PipelineActionsContext'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: MaterializeNodeData }>
@@ -15,6 +16,7 @@ type Props = NodeProps<AppNode & { data: MaterializeNodeData }>
 function MaterializeNode({ id, data, selected }: Props) {
   const { getNodes, getEdges, setNodes } = useReactFlow()
   const { parquetPath, columns = [], rowCount, error } = data
+  const { runDownstreamSinks } = usePipelineActions()
 
   const [running, setRunning] = useState(false)
 
@@ -58,12 +60,13 @@ function MaterializeNode({ id, data, selected }: Props) {
         rowCount: cnt != null ? Number(cnt) : null,
         error: undefined,
       })
+      runDownstreamSinks(id)
     } catch (err) {
       update({ status: 'error', error: err instanceof Error ? err.message : String(err) })
     } finally {
       setRunning(false)
     }
-  }, [id, parquetPath, getNodes, getEdges, update])
+  }, [id, parquetPath, getNodes, getEdges, update, runDownstreamSinks])
 
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 

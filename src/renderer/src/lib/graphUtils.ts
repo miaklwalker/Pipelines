@@ -31,6 +31,25 @@ export function getUpstreamNodeIds(nodeId: string, edges: AppEdge[]): Set<string
   return visited
 }
 
+/** Returns the set of node IDs strictly downstream of `nodeId` (via all edge types). */
+export function getDownstreamNodeIds(nodeId: string, edges: AppEdge[]): Set<string> {
+  const seen = new Set<string>()
+  let frontier = [nodeId]
+  while (frontier.length) {
+    const next: string[] = []
+    for (const sid of frontier) {
+      for (const e of edges) {
+        if (e.source === sid && !seen.has(e.target)) {
+          seen.add(e.target)
+          next.push(e.target)
+        }
+      }
+    }
+    frontier = next
+  }
+  return seen
+}
+
 // ── Node color propagation ─────────────────────────────────────────────────────
 /**
  * Propagates user-set colors downstream through row-stream edges.

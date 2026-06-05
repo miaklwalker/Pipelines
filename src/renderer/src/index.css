@@ -952,6 +952,18 @@ html, body, #root {
   cursor: not-allowed;
 }
 
+/* ── Full execution toggle button ───────────────────── */
+.topbar-btn-full-active {
+  background: rgba(99,102,241,0.15);
+  color: #818cf8;
+  border-color: rgba(99,102,241,0.4);
+}
+.topbar-btn-full-active:hover:not(:disabled) {
+  background: rgba(99,102,241,0.25);
+  border-color: rgba(99,102,241,0.6);
+  color: #a5b4fc;
+}
+
 /* ── Node execution states (set during pipeline run) ─── */
 .react-flow__node { transition: opacity 0.22s ease, box-shadow 0.22s ease; }
 .react-flow__node.node-exec-idle    { opacity: 0.35; }
