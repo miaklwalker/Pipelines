@@ -132,6 +132,16 @@ function quoteIdent(v: string): string {
 // ── Pipeline execution phase ──────────────────────────────────────────────────
 type ExecPhase = 'idle' | 'running' | 'done' | 'error'
 
+// ── Tab ───────────────────────────────────────────────────────────────────────
+interface PipelineTab {
+  id: string
+  filePath: string | null
+  nodes: AppNode[]
+  edges: AppEdge[]
+  nodeUserColors: Record<string, string>
+}
+const INITIAL_TAB_ID = 'tab-0'
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -165,6 +175,12 @@ export default function App() {
   // Queued downstream cascade — set by node components after a manual refresh,
   // processed in a useEffect so React state is committed before sink SQL is built
   const [pendingCascadeFrom, setPendingCascadeFrom] = useState<string | null>(null)
+
+  // Tab management
+  const [tabs, setTabs] = useState<PipelineTab[]>([
+    { id: INITIAL_TAB_ID, filePath: null, nodes: [], edges: [], nodeUserColors: {} },
+  ])
+  const [activeTabId, setActiveTabId] = useState<string>(INITIAL_TAB_ID)
 
   // Node color coding — user-set colors + computed propagated colors
   const [nodeUserColors, setNodeUserColors] = useState<Record<string, string>>({})
@@ -213,6 +229,86 @@ export default function App() {
     if (toastTimer.current) clearTimeout(toastTimer.current)
     toastTimer.current = setTimeout(() => setToast(''), 3000)
   }, [])
+
+  // ── Tab helpers ───────────────────────────────────────────────────────────
+  const tabLabel = (filePath: string | null) => {
+    if (!filePath) return 'Untitled'
+    const name = filePath.replace(/\\/g, '/').split('/').pop() ?? 'Untitled'
+    return name.replace(/\.pipes$/, '') || 'Untitled'
+  }
+
+  const switchToTab = useCallback((tabId: string) => {
+    if (tabId === activeTabId) return
+    setTabs(prev => {
+      const updated = prev.map(t =>
+        t.id === activeTabId
+          ? { ...t, filePath: filePathRef.current, nodes: nodesRef.current, edges: edgesRef.current, nodeUserColors: nodeUserColorsRef.current }
+          : t
+      )
+      const target = updated.find(t => t.id === tabId)
+      if (target) {
+        setNodes(target.nodes)
+        setEdges(target.edges)
+        setCurrentFilePath(target.filePath)
+        setNodeUserColors(target.nodeUserColors)
+      }
+      return updated
+    })
+    setActiveTabId(tabId)
+    setPreviewNodeId(null)
+    setPreviewResult(null)
+    setReportResult(null)
+    setNodeExecState({})
+  }, [activeTabId])
+
+  const openNewTab = useCallback(() => {
+    const newId = `tab-${Date.now()}`
+    setTabs(prev => [
+      ...prev.map(t =>
+        t.id === activeTabId
+          ? { ...t, filePath: filePathRef.current, nodes: nodesRef.current, edges: edgesRef.current, nodeUserColors: nodeUserColorsRef.current }
+          : t
+      ),
+      { id: newId, filePath: null, nodes: [], edges: [], nodeUserColors: {} },
+    ])
+    setActiveTabId(newId)
+    setNodes([])
+    setEdges([])
+    setCurrentFilePath(null)
+    setNodeUserColors({})
+    setPreviewNodeId(null)
+    setPreviewResult(null)
+    setReportResult(null)
+    setNodeExecState({})
+  }, [activeTabId])
+
+  const closeTab = useCallback((tabId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (tabs.length === 1) {
+      // Clear the only tab instead of removing it
+      setNodes([])
+      setEdges([])
+      setCurrentFilePath(null)
+      setNodeUserColors({})
+      setTabs([{ ...tabs[0], filePath: null, nodes: [], edges: [], nodeUserColors: {} }])
+      return
+    }
+    const newTabs = tabs.filter(t => t.id !== tabId)
+    setTabs(newTabs)
+    if (tabId === activeTabId) {
+      const idx = tabs.findIndex(t => t.id === tabId)
+      const next = newTabs[Math.min(idx, newTabs.length - 1)]
+      setNodes(next.nodes)
+      setEdges(next.edges)
+      setCurrentFilePath(next.filePath)
+      setNodeUserColors(next.nodeUserColors)
+      setActiveTabId(next.id)
+      setPreviewNodeId(null)
+      setPreviewResult(null)
+      setReportResult(null)
+      setNodeExecState({})
+    }
+  }, [tabs, activeTabId])
 
   // Stable refs for callbacks that need current state
   const nodesRef = useRef(nodes)
@@ -659,7 +755,9 @@ export default function App() {
   // ── Auto-save last file path + auto-load on startup ─────────────────────
   useEffect(() => {
     if (currentFilePath) window.api.setLastFilePath(currentFilePath)
-  }, [currentFilePath])
+    // Keep the active tab's label in sync whenever the file path changes
+    setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, filePath: currentFilePath } : t))
+  }, [currentFilePath, activeTabId])
 
   useEffect(() => {
     async function autoLoad() {
@@ -1016,6 +1114,20 @@ export default function App() {
       {/* Top bar */}
       <header className="topbar">
         <span className="topbar-title">Pipelines</span>
+
+        <div className="topbar-tabs">
+          {tabs.map(tab => (
+            <div
+              key={tab.id}
+              className={`topbar-tab${tab.id === activeTabId ? ' topbar-tab--active' : ''}`}
+              onClick={() => switchToTab(tab.id)}
+            >
+              <span className="topbar-tab-label">{tabLabel(tab.filePath)}</span>
+              <button className="topbar-tab-close" onClick={(e) => closeTab(tab.id, e)} title="Close tab">×</button>
+            </div>
+          ))}
+          <button className="topbar-tab-new" onClick={openNewTab} title="New tab">+</button>
+        </div>
 
         {toast && (
           <span className="topbar-toast">{toast}</span>

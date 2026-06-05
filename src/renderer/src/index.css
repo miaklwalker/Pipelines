@@ -1294,8 +1294,76 @@ html, body, #root {
   color: var(--text);
   letter-spacing: -0.01em;
   -webkit-app-region: no-drag;
-  flex: 1;
+  flex-shrink: 0;
+  padding-right: 12px;
 }
+.topbar-tabs {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+.topbar-tabs::-webkit-scrollbar { display: none; }
+.topbar-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 12px;
+  cursor: pointer;
+  min-width: 90px;
+  max-width: 180px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  border-right: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  flex-shrink: 0;
+  user-select: none;
+  transition: color 0.1s;
+}
+.topbar-tab:hover { color: var(--text-dim); }
+.topbar-tab--active { color: var(--text); border-bottom-color: var(--border-sel); }
+.topbar-tab-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.topbar-tab-close {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 3px;
+  opacity: 0;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+.topbar-tab:hover .topbar-tab-close,
+.topbar-tab--active .topbar-tab-close { opacity: 0.5; }
+.topbar-tab-close:hover { opacity: 1 !important; background: rgba(255,255,255,0.1); }
+.topbar-tab-new {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 10px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+  font-family: inherit;
+}
+.topbar-tab-new:hover { color: var(--text-dim); background: rgba(255,255,255,0.05); }
 .topbar-actions {
   display: flex;
   align-items: center;
