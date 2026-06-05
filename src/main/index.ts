@@ -489,7 +489,7 @@ ipcMain.handle('pg:write', async (_, config: PgConfig, sql: string, tableName: s
   try {
     await client.query('BEGIN')
     if (writeMode === 'replace') {
-      await client.query(`TRUNCATE TABLE "${tableName}"`)
+      await client.query(`TRUNCATE TABLE ${tableName}`)
     }
     // Insert in batches of 100
     const BATCH = 100
@@ -503,7 +503,7 @@ ipcMain.handle('pg:write', async (_, config: PgConfig, sql: string, tableName: s
         const v = row[c]
         return (typeof v === 'bigint') ? Number(v) : v
       }))
-      await client.query(`INSERT INTO "${tableName}" (${colList}) VALUES ${placeholders}`, values)
+      await client.query(`INSERT INTO ${tableName} (${colList}) VALUES ${placeholders}`, values)
     }
     await client.query('COMMIT')
     return { rowCount: rows.length }
