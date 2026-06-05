@@ -650,18 +650,28 @@ export function buildNodeSQL(
       const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
       if (!inputSQL) return null
 
-      const condition = d.condition?.trim()
-      if (!condition) return `SELECT * FROM (${inputSQL}) __filter`
-
+      // Determine pass/fail BEFORE the empty-condition check so both branches
+      // get the right behaviour: pass = all rows, fail = no rows.
       const isPass = !outputHandle
         || outputHandle === 'row-out-pass'
         || outputHandle.startsWith('col-out-pass-')
+
+      const condition = d.condition?.trim()
+      if (!condition) {
+        // No condition set: every row passes, nothing fails
+        return isPass
+          ? `SELECT * FROM (${inputSQL}) __filter`
+          : `SELECT * FROM (${inputSQL}) __filter WHERE FALSE`
+      }
 
       const whereClause = isPass ? `(${condition})` : `NOT (${condition})`
 
       const valEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'val-in')
       if (valEdge) {
-        const valSQL = buildNodeSQL(valEdge.source, nodes, edges, valEdge.sourceHandle ?? undefined)
+        // sourceHandle may be null on edges loaded from old saves — treat that
+        // as "no specific output handle" (the emitter's only col-out)
+        const valHandle = valEdge.sourceHandle || undefined
+        const valSQL = buildNodeSQL(valEdge.source, nodes, edges, valHandle)
         if (valSQL) {
           return (
             `SELECT __filter.* FROM (${inputSQL}) __filter ` +
