@@ -60,8 +60,8 @@ const SEQ_OFF: Partial<CSSProperties> = { background: '#4c1d1d', border: '2px so
 
 /**
  * Sequence handle (red circle) — controls execution ordering between nodes.
- * seq-out (left dot): this node must complete before the connected node runs.
- * seq-in (right dot): this node waits for the connected node to complete.
+ * seq-out (right dot): drag from here to the next node's seq-in to say "run that node after me".
+ * seq-in (left dot): drop a seq-out edge here to say "I wait for that node to finish first".
  */
 export function seqHandle(connected: boolean, overrides?: CSSProperties): CSSProperties {
   return { width: 10, height: 10, borderRadius: '50%', ...(connected ? SEQ_ON : SEQ_OFF), ...overrides }

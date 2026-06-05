@@ -3,6 +3,16 @@
  * Nothing here imports React or React Flow — just data manipulation.
  */
 
+// ── Path display ─────────────────────────────────────────────────────────────
+/** Returns "parentFolder/filename" for display; falls back to just the filename or the raw string. */
+export function truncatePath(path: string): string {
+  if (!path) return path
+  const parts = path.split(/[/\\]/)
+  const file   = parts.pop()!
+  const parent = parts.pop()
+  return parent ? `${parent}/${file}` : file
+}
+
 // ── Upstream node traversal ───────────────────────────────────────────────────
 /**
  * Returns the set of node IDs that are upstream ancestors of `nodeId`

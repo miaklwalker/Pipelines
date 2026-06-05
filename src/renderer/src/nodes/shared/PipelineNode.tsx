@@ -142,14 +142,14 @@ export function PipelineNode({ selected, children, title = 'Click to preview', c
         position={Position.Top}
         id="seq-out"
         title="Sequence out — connect to a node that should run after this one"
-        style={seqHandle(seqOutConns.length > 0, { left: '28%', top: -8 })}
+        style={seqHandle(seqOutConns.length > 0, { left: '72%', top: -8 })}
       />
       <Handle
         type="target"
         position={Position.Top}
         id="seq-in"
         title="Sequence in — this node waits for the connected node to finish"
-        style={seqHandle(seqInConns.length > 0, { left: '72%', top: -8 })}
+        style={seqHandle(seqInConns.length > 0, { left: '28%', top: -8 })}
       />
     </NodeCollapseContext.Provider>
   )

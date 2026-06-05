@@ -7,6 +7,7 @@ import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
+import { truncatePath } from '../lib/graphUtils'
 
 // ── Type badge ────────────────────────────────────────────────────────────────
 export function typeBadgeClass(type: string): string {
@@ -24,10 +25,10 @@ export function typeBadgeClass(type: string): string {
 type Props = NodeProps<AppNode & { data: CSVNodeData }>
 
 function CSVInputNode({ id, data, selected }: Props) {
-  const { fileName, columns } = data
+  const { filePath, columns } = data
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
-  const subtitle = fileName || (columns.length > 0
+  const subtitle = (filePath ? truncatePath(filePath) : '') || (columns.length > 0
     ? `${columns.length} column${columns.length !== 1 ? 's' : ''}`
     : 'No file loaded')
 

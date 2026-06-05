@@ -7,12 +7,13 @@ import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
+import { truncatePath } from '../lib/graphUtils'
 
 type Props = NodeProps<AppNode & { data: JSONNodeData }>
 
 function JSONInputNode({ id, data, selected }: Props) {
-  const { fileName, columns } = data
-  const subtitle = fileName || (columns.length > 0
+  const { filePath, columns } = data
+  const subtitle = (filePath ? truncatePath(filePath) : '') || (columns.length > 0
     ? `${columns.length} column${columns.length !== 1 ? 's' : ''}`
     : 'No file loaded')
 

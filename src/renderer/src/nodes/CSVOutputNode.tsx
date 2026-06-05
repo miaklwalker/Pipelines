@@ -7,6 +7,7 @@ import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, HEADER_ROW_IN } from './shared/handles'
+import { truncatePath } from '../lib/graphUtils'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: CSVOutputNodeData }>
@@ -25,7 +26,7 @@ type DelimiterKey = (typeof DELIMITER_OPTIONS)[number]['value']
 function CSVOutputNode({ id, data, selected }: Props) {
   const { getNodes, getEdges, setNodes } = useReactFlow()
   const { outputPath, includeHeader = true, inputColumns = [], lastExport, delimiter = 'comma' } = data
-  const displayName = outputPath.split(/[/\\]/).pop() || outputPath
+  const displayName = truncatePath(outputPath)
 
   const [status,   setStatus]   = useState<ExportStatus>('idle')
   const [errorMsg, setErrorMsg] = useState('')
