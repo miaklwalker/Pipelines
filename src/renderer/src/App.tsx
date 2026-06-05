@@ -47,6 +47,7 @@ import ReportDrawer    from './components/ReportDrawer'
 function edgeClass(connection: Connection | AppEdge): string {
   const src = (connection as AppEdge).sourceHandle ?? ''
   const tgt = (connection as AppEdge).targetHandle ?? ''
+  if (src === 'seq-out')          return 'seq-edge'
   if (src.startsWith('col-') || src === 'col-out') return 'col-edge'
   if (src === 'conn-out')         return 'conn-edge'
   if (tgt === 'anchor-in')        return 'row-edge anchor-edge'
@@ -259,10 +260,12 @@ export default function App() {
     const tgtCol  = tgt.startsWith('col-in-')
     const srcConn = src === 'conn-out'
     const tgtConn = tgt === 'conn-in'
+    const srcSeq  = src === 'seq-out'
+    const tgtSeq  = tgt === 'seq-in'
     if (tgt === 'col-in-carry') {
       return sourceNode?.type === 'increment-value' && src === 'col-out'
     }
-    return (srcRow && tgtRow) || (srcCol && tgtCol) || (srcConn && tgtConn)
+    return (srcRow && tgtRow) || (srcCol && tgtCol) || (srcConn && tgtConn) || (srcSeq && tgtSeq)
   }, [])
 
   // ── Canvas click → clear selection ───────────────────────────────────────
@@ -708,8 +711,53 @@ export default function App() {
     })
     setNodeExecState(initState)
 
+    // ── Order sinks by sequence edges (topological sort) ─────────────────────
+    // seq-out → seq-in edges mean "this node must complete before the target".
+    // Build a dependency map among sink nodes and sort them accordingly.
+    const seqEdges = edgesRef.current.filter(
+      (e) => e.sourceHandle === 'seq-out' && e.targetHandle === 'seq-in'
+    )
+    const seqPredMap = new Map<string, string[]>()
+    for (const e of seqEdges) {
+      if (!seqPredMap.has(e.target)) seqPredMap.set(e.target, [])
+      seqPredMap.get(e.target)!.push(e.source)
+    }
+    const sinkIdSet = new Set(sinkNodes.map((s) => s.id))
+
+    function getSinkPredecessors(nodeId: string, visited = new Set<string>()): Set<string> {
+      const result = new Set<string>()
+      if (visited.has(nodeId)) return result
+      visited.add(nodeId)
+      for (const pred of seqPredMap.get(nodeId) ?? []) {
+        if (sinkIdSet.has(pred)) result.add(pred)
+        for (const t of getSinkPredecessors(pred, visited)) result.add(t)
+      }
+      return result
+    }
+
+    const deps = new Map(sinkNodes.map((s) => [s.id, getSinkPredecessors(s.id)]))
+    const inDeg = new Map(sinkNodes.map((s) => [s.id, deps.get(s.id)!.size]))
+    const ready = sinkNodes.filter((s) => inDeg.get(s.id)! === 0)
+    const orderedSinks: AppNode[] = []
+    while (ready.length > 0) {
+      const node = ready.shift()!
+      orderedSinks.push(node)
+      for (const other of sinkNodes) {
+        if (deps.get(other.id)?.has(node.id)) {
+          deps.get(other.id)!.delete(node.id)
+          const d = inDeg.get(other.id)! - 1
+          inDeg.set(other.id, d)
+          if (d === 0) ready.push(other)
+        }
+      }
+    }
+    // Append any sinks not reached (e.g. in a cycle) so they still run
+    for (const s of sinkNodes) {
+      if (!orderedSinks.includes(s)) orderedSinks.push(s)
+    }
+
     // ── Execute each sink sequentially ────────────────────────────────────────
-    for (const sink of sinkNodes) {
+    for (const sink of orderedSinks) {
       // All nodes whose results feed into this specific sink
       const sinkPath = new Set([sink.id, ...getUpstreamNodeIds(sink.id, edgesRef.current)])
 

@@ -14,8 +14,9 @@ import {
   type ReactNode,
   type CSSProperties,
 } from 'react'
-import { useNodeId, useReactFlow } from '@xyflow/react'
+import { Handle, Position, useNodeId, useReactFlow, useNodeConnections } from '@xyflow/react'
 import { useNodeColors } from '../../contexts/NodeColorContext'
+import { seqHandle } from './handles'
 
 // ── Per-node collapse context ─────────────────────────────────────────────────
 
@@ -85,11 +86,12 @@ interface Props {
 }
 
 export function PipelineNode({ selected, children, title = 'Click to preview', className }: Props) {
-  // Collapse state — persisted in node data so it survives save/load.
-  // Reading via getNode() is safe here because React Flow re-renders nodes
-  // when their data changes, so `collapsed` is always fresh.
   const id = useNodeId() ?? ''
   const { getNode, setNodes } = useReactFlow()
+
+  // Sequence handle connectivity — drives connected vs dim style
+  const seqOutConns = useNodeConnections({ handleType: 'source', handleId: 'seq-out' })
+  const seqInConns  = useNodeConnections({ handleType: 'target', handleId: 'seq-in' })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const collapsed = ((getNode(id)?.data ?? {}) as any).columnsCollapsed ?? false
@@ -134,6 +136,21 @@ export function PipelineNode({ selected, children, title = 'Click to preview', c
         )}
         {children}
       </div>
+      {/* Sequence handles rendered after the card so they paint above it */}
+      <Handle
+        type="source"
+        position={Position.Top}
+        id="seq-out"
+        title="Sequence out — connect to a node that should run after this one"
+        style={seqHandle(seqOutConns.length > 0, { left: '28%', top: -8 })}
+      />
+      <Handle
+        type="target"
+        position={Position.Top}
+        id="seq-in"
+        title="Sequence in — this node waits for the connected node to finish"
+        style={seqHandle(seqInConns.length > 0, { left: '72%', top: -8 })}
+      />
     </NodeCollapseContext.Provider>
   )
 }

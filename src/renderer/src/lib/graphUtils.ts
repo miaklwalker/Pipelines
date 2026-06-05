@@ -183,7 +183,12 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
           )
         )
 
-        const wiredSourceCol = sourceColumnFromHandle(inputEdge?.sourceHandle)
+        if (!inputEdge) {
+          // Edge was disconnected — clear the source so the mapping shows as unwired
+          return mapping.sourceCol !== '' ? { ...mapping, sourceCol: '' } : mapping
+        }
+
+        const wiredSourceCol = sourceColumnFromHandle(inputEdge.sourceHandle)
         return wiredSourceCol && wiredSourceCol !== mapping.sourceCol
           ? { ...mapping, sourceCol: wiredSourceCol }
           : mapping

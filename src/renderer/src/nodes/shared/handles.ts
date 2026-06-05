@@ -53,6 +53,20 @@ export function connHandle(connected: boolean, overrides?: CSSProperties): CSSPr
   return { width: 13, height: 13, borderRadius: 3, ...(connected ? CONN_ON : CONN_OFF), ...overrides }
 }
 
+// ── Sequence handles ──────────────────────────────────────────────────────────
+
+const SEQ_ON:  Partial<CSSProperties> = { background: '#ef4444', border: '2px solid #b91c1c' }
+const SEQ_OFF: Partial<CSSProperties> = { background: '#4c1d1d', border: '2px solid #7f1d1d' }
+
+/**
+ * Sequence handle (red circle) — controls execution ordering between nodes.
+ * seq-out (left dot): this node must complete before the connected node runs.
+ * seq-in (right dot): this node waits for the connected node to complete.
+ */
+export function seqHandle(connected: boolean, overrides?: CSSProperties): CSSProperties {
+  return { width: 10, height: 10, borderRadius: '50%', ...(connected ? SEQ_ON : SEQ_OFF), ...overrides }
+}
+
 // ── Named aliases for the common "corner" row-out position ───────────────────
 // Many source nodes put the row-out in the top-right corner of the card.
 export const TOP_RIGHT_ROW_OUT: CSSProperties = {
