@@ -656,6 +656,32 @@ export default function App() {
     }
   }, [showToast])
 
+  // ── Auto-save last file path + auto-load on startup ─────────────────────
+  useEffect(() => {
+    if (currentFilePath) window.api.setLastFilePath(currentFilePath)
+  }, [currentFilePath])
+
+  useEffect(() => {
+    async function autoLoad() {
+      const lastPath = await window.api.getLastFilePath()
+      if (!lastPath) return
+      const loaded = await window.api.loadFromPath(lastPath)
+      if (!loaded) return
+      try {
+        const parsed = JSON.parse(loaded.data) as {
+          version: number; nodes: AppNode[]; edges: AppEdge[]; nodeUserColors?: Record<string, string>
+        }
+        if (!parsed.nodes || !parsed.edges) return
+        nodeCounter = parsed.nodes.length
+        setNodes(parsed.nodes)
+        setEdges(parsed.edges)
+        setNodeUserColors(parsed.nodeUserColors ?? {})
+        setCurrentFilePath(loaded.path)
+      } catch { /* silently ignore corrupt file */ }
+    }
+    autoLoad()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

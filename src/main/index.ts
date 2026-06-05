@@ -284,6 +284,35 @@ ipcMain.handle('project:saveToPath', async (_, { path, data }: { path: string; d
   await fs.writeFile(path, data, 'utf-8')
 })
 
+// ─── App settings (last opened file, etc.) ───────────────────────────────────
+const settingsPath = join(app.getPath('userData'), 'settings.json')
+
+async function readSettings(): Promise<Record<string, unknown>> {
+  try { return JSON.parse(await fs.readFile(settingsPath, 'utf-8')) } catch { return {} }
+}
+async function writeSettings(patch: Record<string, unknown>): Promise<void> {
+  const current = await readSettings()
+  await fs.writeFile(settingsPath, JSON.stringify({ ...current, ...patch }, null, 2), 'utf-8')
+}
+
+ipcMain.handle('project:getLastPath', async (): Promise<string | null> => {
+  const s = await readSettings()
+  return typeof s.lastFilePath === 'string' ? s.lastFilePath : null
+})
+
+ipcMain.handle('project:setLastPath', async (_, path: string): Promise<void> => {
+  await writeSettings({ lastFilePath: path })
+})
+
+// Load a pipeline from a known path — no dialog (used for auto-load on startup)
+ipcMain.handle('project:loadFromPath', async (_, path: string): Promise<{ path: string; data: string } | null> => {
+  try {
+    if (!existsSync(path)) return null
+    const data = await fs.readFile(path, 'utf-8')
+    return { path, data }
+  } catch { return null }
+})
+
 // Load a pipeline from a .pipes JSON file
 ipcMain.handle('project:load', async (): Promise<{ path: string; data: string } | null> => {
   const { canceled, filePaths } = await dialog.showOpenDialog({

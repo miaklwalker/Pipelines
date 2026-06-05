@@ -40,9 +40,12 @@ declare global {
       materializeRun: (sql: string, existingPath?: string) => Promise<MaterializeResult>
 
       // ── Project ────────────────────────────────────────────────────────────
-      saveProject:  (data: string) => Promise<string | null>
-      saveToPath:   (path: string, data: string) => Promise<void>
-      loadProject:  () => Promise<ProjectLoadResult | null>
+      saveProject:    (data: string) => Promise<string | null>
+      saveToPath:     (path: string, data: string) => Promise<void>
+      loadProject:    () => Promise<ProjectLoadResult | null>
+      loadFromPath:   (path: string) => Promise<ProjectLoadResult | null>
+      getLastFilePath: () => Promise<string | null>
+      setLastFilePath: (path: string) => Promise<void>
 
       // ── PostgreSQL ─────────────────────────────────────────────────────────
       pgTest:          (config: PgConfig) => Promise<PgTestResult>

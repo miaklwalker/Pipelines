@@ -33,6 +33,9 @@ const api = {
   saveProject: (data: string): Promise<string | null> => ipcRenderer.invoke('project:save', { data }),
   saveToPath: (path: string, data: string): Promise<void> => ipcRenderer.invoke('project:saveToPath', { path, data }),
   loadProject: (): Promise<ProjectLoadResult | null> => ipcRenderer.invoke('project:load'),
+  loadFromPath: (path: string): Promise<ProjectLoadResult | null> => ipcRenderer.invoke('project:loadFromPath', path),
+  getLastFilePath: (): Promise<string | null> => ipcRenderer.invoke('project:getLastPath'),
+  setLastFilePath: (path: string): Promise<void> => ipcRenderer.invoke('project:setLastPath', path),
   // PostgreSQL
   pgTest: (config: PgConfig): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('pg:test', config),
   pgFetch: (config: PgConfig, query: string): Promise<PgFetchResult> => ipcRenderer.invoke('pg:fetch', config, query),
