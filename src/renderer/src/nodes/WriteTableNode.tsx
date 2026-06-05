@@ -19,6 +19,7 @@ function WriteTableNode({ id, data, selected }: Props) {
     status = 'idle', rowCount = null, error, resolvedConfig,
     inputColumns = [],
     dbTables = [], dbSelectedSchema = null, dbStatus = 'idle', dbError,
+    writeProgress = null,
   } = data
 
   const [dbFilter, setDbFilter] = useState('')
@@ -71,12 +72,17 @@ function WriteTableNode({ id, data, selected }: Props) {
     // exactly what a user would type manually (e.g. "surplus.brand").
     const qualifiedTable = dbSelectedSchema ? `${dbSelectedSchema}.${tableName}` : tableName
 
-    update({ status: 'writing', error: undefined, rowCount: null })
+    update({ status: 'writing', error: undefined, rowCount: null, writeProgress: null })
+    window.api.onPgWriteProgress((written, total) => {
+      update({ writeProgress: { written, total } })
+    })
     try {
       const result = await window.api.pgWrite(resolvedConfig, sql, qualifiedTable, writeMode)
-      update({ status: 'done', rowCount: result.rowCount })
+      window.api.offPgWriteProgress()
+      update({ status: 'done', rowCount: result.rowCount, writeProgress: null })
     } catch (err) {
-      update({ status: 'error', error: String(err) })
+      window.api.offPgWriteProgress()
+      update({ status: 'error', error: String(err), writeProgress: null })
     }
   }, [id, resolvedConfig, tableName, writeMode, getNodes, getEdges, update])
 
@@ -87,8 +93,12 @@ function WriteTableNode({ id, data, selected }: Props) {
 
   const selectedLabel = dbSelectedSchema ? `${dbSelectedSchema}.${tableName}` : tableName
 
+  const writingLabel = writeProgress
+    ? `Writing ${writeProgress.written.toLocaleString()} / ${writeProgress.total.toLocaleString()} rows…`
+    : 'Writing…'
+
   const subtitle = status === 'done'    ? `${rowCount?.toLocaleString()} rows written`
-    : status === 'writing'              ? 'Writing…'
+    : status === 'writing'              ? writingLabel
     : status === 'error'                ? 'Write failed'
     : isConnected ? (tableName ? `→ ${selectedLabel}` : 'Select a target table') : 'Connect a database'
 
@@ -192,6 +202,24 @@ function WriteTableNode({ id, data, selected }: Props) {
             : <>Write to Database</>}
         </button>
 
+        {status === 'writing' && (
+          <div style={{ marginTop: 5, height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
+            {writeProgress && writeProgress.total > 0
+              ? <div style={{
+                  height: '100%', borderRadius: 2,
+                  background: 'var(--blue)',
+                  width: `${Math.round((writeProgress.written / writeProgress.total) * 100)}%`,
+                  transition: 'width 0.15s ease',
+                }} />
+              : <div style={{
+                  height: '100%', width: '40%', borderRadius: 2,
+                  background: 'var(--blue)',
+                  animation: 'write-progress-indeterminate 1.2s ease-in-out infinite',
+                }} />
+            }
+          </div>
+        )}
+
         {error && <div className="db-error-msg">{error}</div>}
       </div>
 
@@ -202,7 +230,7 @@ function WriteTableNode({ id, data, selected }: Props) {
             : !hasInput     ? 'Connect a data source'
             : !tableName    ? 'Select or enter target table'
             : status === 'idle'    ? 'Ready to write'
-            : status === 'writing' ? 'Writing rows…'
+            : status === 'writing' ? writingLabel
             : status === 'done'    ? `Wrote ${rowCount?.toLocaleString() ?? '?'} rows`
             : 'Write failed — check error above'}
         </span>

@@ -1332,6 +1332,10 @@ html, body, #root {
 /* Spinning animation for Loader icon */
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }
+@keyframes write-progress-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
 
 /* ── Emitter nodes (Static Value, Increment) ─────────────────────────────────── */
 .emitter-legend {

@@ -505,7 +505,7 @@ ipcMain.handle('materialize:run', async (_, { sql, existingPath }: { sql: string
 })
 
 // Execute DuckDB SQL → insert into PG table
-ipcMain.handle('pg:write', async (_, config: PgConfig, sql: string, tableName: string, writeMode: string): Promise<{ rowCount: number }> => {
+ipcMain.handle('pg:write', async (event, config: PgConfig, sql: string, tableName: string, writeMode: string): Promise<{ rowCount: number }> => {
   // 1. Run pipeline SQL in DuckDB to get rows
   const rows: Record<string, unknown>[] = await new Promise((resolve, reject) => {
     conn.all(sql, (err, r) => err ? reject(new Error(err.message)) : resolve(r as Record<string, unknown>[]))
@@ -533,6 +533,7 @@ ipcMain.handle('pg:write', async (_, config: PgConfig, sql: string, tableName: s
         return (typeof v === 'bigint') ? Number(v) : v
       }))
       await client.query(`INSERT INTO ${tableName} (${colList}) VALUES ${placeholders}`, values)
+      event.sender.send('pg:write-progress', i + batch.length, rows.length)
     }
     await client.query('COMMIT')
     return { rowCount: rows.length }

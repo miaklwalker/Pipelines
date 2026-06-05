@@ -227,6 +227,7 @@ export interface WriteTableNodeData extends Record<string, unknown> {
   status: 'idle' | 'writing' | 'done' | 'error'
   rowCount: number | null
   error?: string
+  writeProgress?: { written: number; total: number } | null
   /** Schema browser state */
   dbTables?: TableEntry[]
   dbSelectedSchema?: string | null

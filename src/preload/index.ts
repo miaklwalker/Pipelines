@@ -42,6 +42,9 @@ const api = {
   pgFetchCached: (config: PgConfig, query: string, force: boolean): Promise<PgFetchResult> => ipcRenderer.invoke('pg:fetch-cached', config, query, force),
   pgClearCache: (csvPath: string): Promise<void> => ipcRenderer.invoke('pg:clear-cache', csvPath),
   pgWrite: (config: PgConfig, sql: string, tableName: string, writeMode: string): Promise<PgWriteResult> => ipcRenderer.invoke('pg:write', config, sql, tableName, writeMode),
+  onPgWriteProgress: (cb: (written: number, total: number) => void) =>
+    ipcRenderer.on('pg:write-progress', (_e, written, total) => cb(written, total)),
+  offPgWriteProgress: () => ipcRenderer.removeAllListeners('pg:write-progress'),
   pgListTables: (config: PgConfig): Promise<TableEntry[]> => ipcRenderer.invoke('pg:list-tables', config),
   pgDescribeTable: (config: PgConfig, schema: string, table: string): Promise<ColumnInfo[]> => ipcRenderer.invoke('pg:describe-table', config, schema, table),
 }

@@ -893,8 +893,27 @@ export default function App() {
           const sql = buildNodeSQL(inputEdge.source, nodesRef.current, edgesRef.current, inputEdge.sourceHandle ?? undefined)
           if (!sql) throw new Error('Could not build upstream SQL for Write Table')
           const qualifiedTable = d.dbSelectedSchema ? `${d.dbSelectedSchema}.${d.tableName}` : d.tableName
-          const result = await window.api.pgWrite(d.resolvedConfig!, sql, qualifiedTable, d.writeMode)
-          showToast(`✓ Wrote ${result.rowCount.toLocaleString()} rows → ${qualifiedTable}`)
+          setNodes((ns) => ns.map((n) => n.id === sink.id
+            ? { ...n, data: { ...n.data, status: 'writing', writeProgress: null, error: undefined, rowCount: null } }
+            : n
+          ))
+          window.api.onPgWriteProgress((written, total) => {
+            setNodes((ns) => ns.map((n) => n.id === sink.id
+              ? { ...n, data: { ...n.data, writeProgress: { written, total } } }
+              : n
+            ))
+          })
+          let writeResult: { rowCount: number }
+          try {
+            writeResult = await window.api.pgWrite(d.resolvedConfig!, sql, qualifiedTable, d.writeMode)
+          } finally {
+            window.api.offPgWriteProgress()
+          }
+          setNodes((ns) => ns.map((n) => n.id === sink.id
+            ? { ...n, data: { ...n.data, status: 'done', rowCount: writeResult.rowCount, writeProgress: null } }
+            : n
+          ))
+          showToast(`✓ Wrote ${writeResult.rowCount.toLocaleString()} rows → ${qualifiedTable}`)
         } else if (sink.type === 'csv-output') {
           const d = sink.data as CSVOutputNodeData
           const sql = buildNodeSQL(sink.id, nodesRef.current, edgesRef.current)
@@ -938,6 +957,13 @@ export default function App() {
           return next
         })
       } catch (err) {
+        window.api.offPgWriteProgress()
+        if (sink.type === 'write-table') {
+          setNodes((ns) => ns.map((n) => n.id === sink.id
+            ? { ...n, data: { ...n.data, status: 'error', error: String(err), writeProgress: null } }
+            : n
+          ))
+        }
         // Mark only the failed sink red; its upstream stays pulsing until cleared
         setNodeExecState((s) => ({ ...s, [sink.id]: 'error' }))
         showToast(`✗ ${err instanceof Error ? err.message : String(err)}`)
