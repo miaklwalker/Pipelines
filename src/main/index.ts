@@ -489,7 +489,7 @@ ipcMain.handle('pg:write', async (_, config: PgConfig, sql: string, tableName: s
   try {
     await client.query('BEGIN')
     if (writeMode === 'replace') {
-      await client.query(`TRUNCATE TABLE ${tableName}`)
+      await client.query(`TRUNCATE TABLE ${tableName} CASCADE`)
     }
     // Insert in batches of 100
     const BATCH = 100
