@@ -12,7 +12,11 @@ type Props = NodeProps<AppNode & { data: UniqueNodeData }>
 
 function UniqueNode({ id, data, selected }: Props) {
   const { setNodes } = useReactFlow()
-  const { keyColumn = '', keep = 'first', inputColumns = [] } = data
+
+  // Migrate old single-key saves: keyColumn → keyColumns
+  const rawKeys = data.keyColumns
+    ?? (data.keyColumn ? [data.keyColumn] : [])
+  const { keep = 'first', inputColumns = [] } = data
 
   const update = useCallback(
     (patch: Partial<UniqueNodeData>) =>
@@ -21,20 +25,29 @@ function UniqueNode({ id, data, selected }: Props) {
   )
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
+  const toggleKey = useCallback((col: string) => {
+    const next = rawKeys.includes(col)
+      ? rawKeys.filter((c) => c !== col)
+      : [...rawKeys, col]
+    update({ keyColumns: next })
+  }, [rawKeys, update])
+
   const hasInput = inputColumns.length > 0
-  const isReady  = hasInput && !!keyColumn
+  const isReady  = hasInput && rawKeys.length > 0
+
+  const keyLabel = rawKeys.length === 0 ? 'none'
+    : rawKeys.length === 1 ? `"${rawKeys[0]}"`
+    : `${rawKeys.length} cols`
+
   const subtitle = isReady
-    ? `"${keyColumn}" · keep ${keep}`
-    : hasInput ? 'Select a key column' : 'No input connected'
+    ? `${keyLabel} · keep ${keep}`
+    : hasInput ? 'Select key column(s)' : 'No input connected'
 
   return (
     <PipelineNode selected={selected}>
-      {/* Row input */}
       <Handle type="target" position={Position.Left} id="row-in"
         style={rowHandle(hasInput, { top: 36, left: -7 })}
       />
-
-      {/* Row output — top-right corner */}
       <Handle type="source" position={Position.Right} id="row-out"
         style={rowHandle(true, TOP_RIGHT_ROW_OUT)}
       />
@@ -42,21 +55,23 @@ function UniqueNode({ id, data, selected }: Props) {
       <NodeHeader def={uniqueDef} id={id} subtitle={subtitle} />
 
       <div className="node-body">
-        {/* Key column selector */}
-        <div className="node-body-row">
-          <span className="node-label">Key</span>
+
+        {/* Key column pills */}
+        <div className="node-body-row" style={{ alignItems: 'flex-start' }}>
+          <span className="node-label" style={{ paddingTop: 3 }}>Key</span>
           {hasInput ? (
-            <select
-              className="node-select"
-              value={keyColumn}
-              onChange={(e) => update({ keyColumn: e.target.value })}
-              onClick={stopProp} onMouseDown={stopProp}
-            >
-              <option value="">— pick column —</option>
-              {inputColumns.map((c) => (
-                <option key={c.name} value={c.name}>{c.name}</option>
+            <div className="agg-col-pills" onClick={stopProp} onMouseDown={stopProp}>
+              {inputColumns.map((col) => (
+                <button
+                  key={col.name}
+                  className={`agg-col-pill${rawKeys.includes(col.name) ? ' active' : ''}`}
+                  onClick={() => toggleKey(col.name)}
+                  title={col.name}
+                >
+                  {col.name}
+                </button>
               ))}
-            </select>
+            </div>
           ) : (
             <input className="node-input" disabled placeholder="connect input first" />
           )}
@@ -81,9 +96,11 @@ function UniqueNode({ id, data, selected }: Props) {
       <div className="status-row">
         <div className={`status-dot ${isReady ? 'ready' : 'pending'}`} />
         <span className="status-text">
-          {!hasInput ? 'Connect a row input'
-            : !keyColumn ? 'Select a key column'
-            : `Deduplicate on "${keyColumn}"`}
+          {!hasInput         ? 'Connect a row input'
+            : !isReady       ? 'Select at least one key column'
+            : rawKeys.length === 1
+              ? `Deduplicate on "${rawKeys[0]}"`
+              : `Deduplicate on ${rawKeys.length} columns`}
         </span>
       </div>
     </PipelineNode>
@@ -100,10 +117,11 @@ export const uniqueDef: NodeDef<UniqueNodeData> = {
   desc: 'Keep first or last row per key',
   Icon: Fingerprint,
   help: {
-    summary: 'Deduplicates rows by a key column, keeping either the first or last occurrence of each distinct value. All other columns are preserved.',
+    summary: 'Deduplicates rows by one or more key columns, keeping either the first or last occurrence of each distinct combination. All other columns are preserved.',
     inputs: 'Row stream (blue square).',
-    outputs: 'Row stream — one row per unique key value.',
+    outputs: 'Row stream — one row per unique key combination.',
     tips: [
+      'Click column pills to toggle them in or out of the composite key.',
       '"First" keeps the row that appears earliest in the input; "Last" keeps the final occurrence.',
       'Row order is determined by the upstream data — add a Sort node if you need deterministic first/last behaviour.',
       'All columns pass through unchanged; only duplicate rows are dropped.',
@@ -111,7 +129,7 @@ export const uniqueDef: NodeDef<UniqueNodeData> = {
   },
   inputPorts:  [{ type: 'row' }],
   outputPorts: [{ type: 'row' }],
-  defaultData: () => ({ keyColumn: '', keep: 'first', inputColumns: [] }),
+  defaultData: () => ({ keyColumns: [], keep: 'first', inputColumns: [] }),
   Component: Memoized,
 }
 

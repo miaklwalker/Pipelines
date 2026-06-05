@@ -724,15 +724,20 @@ export function buildNodeSQL(
 
     case 'unique': {
       const d = node.data as UniqueNodeData
+      // Support both new (keyColumns[]) and old (keyColumn string) saves
+      const keys = d.keyColumns?.length ? d.keyColumns
+        : d.keyColumn ? [d.keyColumn]
+        : []
       const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
       if (!inputEdge) return null
       const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
-      if (!inputSQL || !d.keyColumn) return null
+      if (!inputSQL || !keys.length) return null
       const order = d.keep === 'last' ? 'DESC' : 'ASC'
+      const partitionBy = keys.map((k) => `"${k}"`).join(', ')
       return (
         `SELECT * EXCLUDE __seq FROM ` +
         `(SELECT *, ROW_NUMBER() OVER () AS __seq FROM (${inputSQL}) __t) ` +
-        `QUALIFY ROW_NUMBER() OVER (PARTITION BY "${d.keyColumn}" ORDER BY __seq ${order}) = 1`
+        `QUALIFY ROW_NUMBER() OVER (PARTITION BY ${partitionBy} ORDER BY __seq ${order}) = 1`
       )
     }
 

@@ -257,7 +257,9 @@ export interface AggregateNodeData extends Record<string, unknown> {
 }
 
 export interface UniqueNodeData extends Record<string, unknown> {
-  keyColumn: string            // column to deduplicate on
+  keyColumns: string[]         // columns to deduplicate on (composite key)
+  /** @deprecated use keyColumns — kept for loading old saves */
+  keyColumn?: string
   keep: 'first' | 'last'      // which occurrence to keep
   inputColumns: ColumnInfo[]
 }
