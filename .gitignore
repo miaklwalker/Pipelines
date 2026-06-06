@@ -5,3 +5,4 @@ out
 *.pipes
 .DS_Store
 tsconfig.web.tsbuildinfo
+.idea

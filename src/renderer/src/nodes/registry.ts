@@ -23,7 +23,7 @@ export interface NodeDef<D = any> {
   /** One-line description shown in the sidebar */
   desc: string
   /** Lucide icon component */
-  Icon: ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
+  Icon: ComponentType<any>
   /** Inline help dossier content */
   help: NodeHelp
   /** Sidebar port indicators (input side) */
