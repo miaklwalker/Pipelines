@@ -308,6 +308,88 @@ export interface BrowseSchemaNodeData extends Record<string, unknown> {
   resolvedConfig?: PgConfig | null
 }
 
+// ─── API node types ──────────────────────────────────────────────────────────
+
+export interface ApiHeader {
+  id: string
+  key: string
+  value: string
+}
+
+/** Used by api-get and api-delete nodes */
+export interface ApiGetNodeData extends Record<string, unknown> {
+  method: 'GET' | 'DELETE'
+  url: string
+  headers: ApiHeader[]
+  jsonPath: string | null
+  columns: ColumnInfo[]
+  rowCount: number | null
+  status: 'idle' | 'fetching' | 'done' | 'error'
+  error?: string
+  lastFetched?: string
+}
+
+/** Used by api-post, api-put, api-patch nodes */
+export interface ApiBodyNodeData extends Record<string, unknown> {
+  method: 'POST' | 'PUT' | 'PATCH'
+  url: string
+  headers: ApiHeader[]
+  /** 'upstream' = row-in body; 'static' = manual JSON textarea */
+  bodyMode: 'upstream' | 'static'
+  staticBody: string
+  jsonPath: string | null
+  columns: ColumnInfo[]
+  rowCount: number | null
+  status: 'idle' | 'fetching' | 'done' | 'error'
+  error?: string
+  lastFetched?: string
+  inputColumns: ColumnInfo[]
+}
+
+export interface ApiAuthNodeData extends Record<string, unknown> {
+  method: 'GET' | 'POST'
+  url: string
+  headers: ApiHeader[]
+  body: string
+  /** JSONPath to extract token, e.g. $.access_token */
+  tokenPath: string
+  /** Header name to inject into downstream requests */
+  headerName: string
+  /** Template for header value, {{token}} is replaced with extracted token */
+  headerTemplate: string
+  token?: string
+  status: 'idle' | 'fetching' | 'done' | 'error'
+  error?: string
+  lastFetched?: string
+}
+
+export type PaginationStrategy = 'page' | 'offset' | 'cursor' | 'link-header'
+
+export interface ApiPaginatedNodeData extends Record<string, unknown> {
+  url: string
+  headers: ApiHeader[]
+  strategy: PaginationStrategy
+  pageParam: string
+  pageStart: number
+  offsetParam: string
+  limitParam: string
+  limitValue: number
+  cursorPath: string
+  cursorParam: string
+  cursorIn: 'query' | 'body'
+  dataPath: string
+  maxPages: number
+  failOnError: boolean
+  jsonPath: string | null
+  columns: ColumnInfo[]
+  rowCount: number | null
+  pagesFetched?: number
+  hadErrors?: boolean
+  status: 'idle' | 'fetching' | 'done' | 'error'
+  error?: string
+  lastFetched?: string
+}
+
 // ─── Union node type ─────────────────────────────────────────────────────────
 
 export type AppNode =
@@ -337,5 +419,12 @@ export type AppNode =
   | Node<WriteTableNodeData,      'write-table'>
   | Node<BrowseSchemaNodeData,    'browse-schema'>
   | Node<ReportNodeData,          'report'>
+  | Node<ApiGetNodeData,          'api-get'>
+  | Node<ApiGetNodeData,          'api-delete'>
+  | Node<ApiBodyNodeData,         'api-post'>
+  | Node<ApiBodyNodeData,         'api-put'>
+  | Node<ApiBodyNodeData,         'api-patch'>
+  | Node<ApiAuthNodeData,         'api-auth'>
+  | Node<ApiPaginatedNodeData,    'api-paginated'>
 
 export type AppEdge = Edge

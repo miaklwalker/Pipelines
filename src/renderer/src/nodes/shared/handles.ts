@@ -53,6 +53,18 @@ export function connHandle(connected: boolean, overrides?: CSSProperties): CSSPr
   return { width: 13, height: 13, borderRadius: 3, ...(connected ? CONN_ON : CONN_OFF), ...overrides }
 }
 
+// ── Token handles (orange circle) ────────────────────────────────────────────
+const TOKEN_ON:  Partial<CSSProperties> = { background: '#f97316', border: '2px solid #c2410c' }
+const TOKEN_OFF: Partial<CSSProperties> = { background: '#431407', border: '2px solid #7c2d12' }
+
+/**
+ * Auth-token handle (orange circle) — carries a resolved bearer/API token
+ * from an api-auth node into downstream api-request nodes.
+ */
+export function tokenHandle(connected: boolean, overrides?: CSSProperties): CSSProperties {
+  return { width: 11, height: 11, borderRadius: '50%', ...(connected ? TOKEN_ON : TOKEN_OFF), ...overrides }
+}
+
 // ── Sequence handles ──────────────────────────────────────────────────────────
 
 const SEQ_ON:  Partial<CSSProperties> = { background: '#ef4444', border: '2px solid #b91c1c' }

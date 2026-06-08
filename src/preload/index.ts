@@ -13,6 +13,9 @@ export type PgWriteResult   = { rowCount: number }
 export type TableEntry      = { schema: string; name: string }
 export type MaterializeResult = { parquetPath: string; columns: ColumnInfo[] }
 export type ProjectLoadResult = { path: string; data: string }
+export type ApiFetchResult = { jsonPath: string; columns: ColumnInfo[]; rowCount: number }
+export type ApiAuthResult  = { token: string }
+export type ApiPaginatedResult = { jsonPath: string; columns: ColumnInfo[]; rowCount: number; pagesFetched: number; hadErrors: boolean }
 
 const api = {
   // CSV
@@ -47,6 +50,13 @@ const api = {
   offPgWriteProgress: () => ipcRenderer.removeAllListeners('pg:write-progress'),
   pgListTables: (config: PgConfig): Promise<TableEntry[]> => ipcRenderer.invoke('pg:list-tables', config),
   pgDescribeTable: (config: PgConfig, schema: string, table: string): Promise<ColumnInfo[]> => ipcRenderer.invoke('pg:describe-table', config, schema, table),
+  // API calls
+  apiFetch: (params: { url: string; method: string; headers: Record<string, string>; body?: string; upstreamSQL?: string; nodeId: string }): Promise<ApiFetchResult> =>
+    ipcRenderer.invoke('api:fetch', params),
+  apiAuth: (params: { url: string; method: string; headers: Record<string, string>; body?: string; tokenPath: string }): Promise<ApiAuthResult> =>
+    ipcRenderer.invoke('api:auth', params),
+  apiPaginated: (params: Record<string, unknown>): Promise<ApiPaginatedResult> =>
+    ipcRenderer.invoke('api:paginated', params),
 }
 
 contextBridge.exposeInMainWorld('api', api)

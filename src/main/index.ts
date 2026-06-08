@@ -125,17 +125,25 @@ ipcMain.handle('db:preview', async (_, { sql }: { sql: string }): Promise<Previe
 
       conn.all(`SELECT * FROM (${sql}) __preview LIMIT 50`, (err, rows) => {
         if (err) return reject(new Error(err.message))
-        if (!rows?.length) return resolve({ columns: [], rows: [], rowCount })
-        const columns = Object.keys(rows[0] as object)
-        const data = (rows as Record<string, unknown>[]).map((r) =>
-          columns.map((c) => {
-            const v = r[c]
-            if (v === null || v === undefined) return null
-            if (v instanceof Date) return v.toISOString()
-            return String(v)
-          })
-        )
-        resolve({ columns, rows: data, rowCount })
+        try {
+          if (!rows?.length) return resolve({ columns: [], rows: [], rowCount })
+          const columns = Object.keys(rows[0] as object)
+          const data = (rows as Record<string, unknown>[]).map((r) =>
+            columns.map((c) => {
+              const v = r[c]
+              if (v === null || v === undefined) return null
+              if (v instanceof Date) return v.toISOString()
+              if (typeof v === 'bigint') return String(v)
+              // DuckDB STRUCT/LIST/JSON types come back as JS objects — sanitize
+              // BigInts inside them before stringifying (JSON.stringify(BigInt) is fatal)
+              if (typeof v === 'object') return JSON.stringify(sanitizeBigInts(v))
+              return String(v)
+            })
+          )
+          resolve({ columns, rows: data, rowCount })
+        } catch (e) {
+          reject(e instanceof Error ? e : new Error(String(e)))
+        }
       })
     })
   })
@@ -546,6 +554,257 @@ ipcMain.handle('pg:write', async (event, config: PgConfig, sql: string, tableNam
   }
 })
 
+// ─── API fetch helpers ────────────────────────────────────────────────────────
+
+function sanitizeBigInts(obj: unknown): unknown {
+  if (typeof obj === 'bigint') return Number(obj)
+  if (Array.isArray(obj)) return obj.map(sanitizeBigInts)
+  if (obj !== null && typeof obj === 'object')
+    return Object.fromEntries(Object.entries(obj as Record<string, unknown>).map(([k, v]) => [k, sanitizeBigInts(v)]))
+  return obj
+}
+
+function extractByPath(obj: unknown, path: string): unknown {
+  if (!path || path === '$') return obj
+  const parts = path.replace(/^\$\.?/, '').split('.')
+  let current = obj
+  for (const part of parts) {
+    if (current == null) return null
+    current = (current as Record<string, unknown>)[part]
+  }
+  return current
+}
+
+function addQueryParam(url: string, name: string, value: string): string {
+  try {
+    const u = new URL(url)
+    u.searchParams.set(name, value)
+    return u.toString()
+  } catch {
+    const sep = url.includes('?') ? '&' : '?'
+    return `${url}${sep}${encodeURIComponent(name)}=${encodeURIComponent(value)}`
+  }
+}
+
+function parseLinkHeader(header: string | null): string | null {
+  if (!header) return null
+  const match = header.match(/<([^>]+)>;\s*rel="next"/)
+  return match ? match[1] : null
+}
+
+function ensureApiCacheDir(): string {
+  const dir = join(app.getPath('userData'), 'api-cache')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+async function inferApiColumns(jsonPath: string): Promise<ColumnInfo[]> {
+  const safe = jsonPath.replace(/'/g, "''")
+  return new Promise((resolve, reject) => {
+    conn.run(
+      `CREATE OR REPLACE VIEW __api_schema_sniff AS SELECT * FROM read_json_auto('${safe}', format='array') LIMIT 0`,
+      (err) => {
+        if (err) return reject(new Error(`Schema inference failed: ${err.message}`))
+        conn.all('DESCRIBE __api_schema_sniff', (descErr, rows) => {
+          if (descErr) return reject(new Error(descErr.message))
+          resolve((rows as DescribeRow[]).map((r) => ({
+            name: r.column_name,
+            type: normalizeType(r.column_type),
+          })))
+        })
+      }
+    )
+  })
+}
+
+// ─── api:fetch ────────────────────────────────────────────────────────────────
+
+interface ApiFetchParams {
+  url: string
+  method: string
+  headers: Record<string, string>
+  body?: string
+  upstreamSQL?: string
+  nodeId: string
+}
+
+interface ApiFetchResult {
+  jsonPath: string
+  columns: ColumnInfo[]
+  rowCount: number
+}
+
+ipcMain.handle('api:fetch', async (_, params: ApiFetchParams): Promise<ApiFetchResult> => {
+  const { url, method, headers, body, upstreamSQL, nodeId } = params
+
+  let requestBody: string | undefined = body || undefined
+  if (upstreamSQL) {
+    const rows: Record<string, unknown>[] = await new Promise((resolve, reject) => {
+      conn.all(upstreamSQL, (err, r) => err ? reject(new Error(err.message)) : resolve(r as Record<string, unknown>[]))
+    })
+    requestBody = JSON.stringify(sanitizeBigInts(rows))
+  }
+
+  const response = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: requestBody,
+  })
+
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+
+  const json = await response.json()
+  const array = Array.isArray(json) ? json : [json]
+
+  const cacheDir = ensureApiCacheDir()
+  const jsonPath = join(cacheDir, `${nodeId}.json`)
+  await fs.writeFile(jsonPath, JSON.stringify(sanitizeBigInts(array)))
+
+  const columns = array.length > 0 ? await inferApiColumns(jsonPath) : []
+  return { jsonPath, columns, rowCount: array.length }
+})
+
+// ─── api:auth ─────────────────────────────────────────────────────────────────
+
+interface ApiAuthParams {
+  url: string
+  method: string
+  headers: Record<string, string>
+  body?: string
+  tokenPath: string
+}
+
+ipcMain.handle('api:auth', async (_, params: ApiAuthParams): Promise<{ token: string }> => {
+  const { url, method, headers, body, tokenPath } = params
+
+  const response = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: body || undefined,
+  })
+
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+
+  const json = await response.json()
+  const token = extractByPath(json, tokenPath)
+
+  if (!token || typeof token !== 'string')
+    throw new Error(`Token not found at path "${tokenPath}"`)
+
+  return { token }
+})
+
+// ─── api:paginated ────────────────────────────────────────────────────────────
+
+interface ApiPaginatedParams {
+  url: string
+  headers: Record<string, string>
+  strategy: 'page' | 'offset' | 'cursor' | 'link-header'
+  pageParam?: string
+  pageStart?: number
+  offsetParam?: string
+  limitParam?: string
+  limitValue?: number
+  cursorPath?: string
+  cursorParam?: string
+  cursorIn?: 'query' | 'body'
+  dataPath?: string
+  maxPages?: number
+  failOnError?: boolean
+  nodeId: string
+}
+
+interface ApiPaginatedResult {
+  jsonPath: string
+  columns: ColumnInfo[]
+  rowCount: number
+  pagesFetched: number
+  hadErrors: boolean
+}
+
+ipcMain.handle('api:paginated', async (_, params: ApiPaginatedParams): Promise<ApiPaginatedResult> => {
+  const {
+    url, headers, strategy, nodeId,
+    pageParam = 'page', pageStart = 1,
+    offsetParam = 'offset', limitParam = 'limit', limitValue = 100,
+    cursorPath = '', cursorParam = 'cursor', cursorIn = 'query',
+    dataPath = '', maxPages = 100, failOnError = false,
+  } = params
+
+  const allRows: unknown[] = []
+  let pagesFetched = 0
+  let hadErrors = false
+  let done = false
+  let cursor: string | null = null
+  let nextUrl: string = url
+
+  while (!done && pagesFetched < maxPages) {
+    let requestUrl = url
+    let requestBody: string | undefined
+
+    if (strategy === 'page') {
+      requestUrl = addQueryParam(url, pageParam, String(pageStart + pagesFetched))
+    } else if (strategy === 'offset') {
+      requestUrl = addQueryParam(url, offsetParam, String(pagesFetched * limitValue))
+      requestUrl = addQueryParam(requestUrl, limitParam, String(limitValue))
+    } else if (strategy === 'cursor') {
+      if (pagesFetched > 0 && cursor) {
+        if (cursorIn === 'query') requestUrl = addQueryParam(url, cursorParam, cursor)
+        else requestBody = JSON.stringify({ [cursorParam]: cursor })
+      }
+    } else if (strategy === 'link-header') {
+      requestUrl = nextUrl
+    }
+
+    try {
+      const response = await fetch(requestUrl, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: requestBody,
+      })
+
+      if (!response.ok) {
+        if (failOnError) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        hadErrors = true
+        done = true
+        break
+      }
+
+      const json = await response.json()
+      const data = dataPath ? extractByPath(json, dataPath) : json
+      const rows = Array.isArray(data) ? data : (data != null ? [data] : [])
+
+      if (rows.length === 0) { done = true; break }
+
+      allRows.push(...rows)
+      pagesFetched++
+
+      if (strategy === 'page' || strategy === 'offset') {
+        if (rows.length < limitValue) done = true
+      } else if (strategy === 'cursor') {
+        cursor = extractByPath(json, cursorPath) as string | null
+        if (!cursor) done = true
+      } else if (strategy === 'link-header') {
+        const linkHdr = response.headers.get('link')
+        const link = parseLinkHeader(linkHdr)
+        if (link) nextUrl = link
+        else done = true
+      }
+    } catch (err) {
+      if (failOnError) throw err
+      hadErrors = true
+      done = true
+    }
+  }
+
+  const cacheDir = ensureApiCacheDir()
+  const jsonPath = join(cacheDir, `${nodeId}.json`)
+  await fs.writeFile(jsonPath, JSON.stringify(sanitizeBigInts(allRows)))
+
+  const columns = allRows.length > 0 ? await inferApiColumns(jsonPath) : []
+  return { jsonPath, columns, rowCount: allRows.length, pagesFetched, hadErrors }
+})
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function normalizeType(raw: string): string {
@@ -557,6 +816,10 @@ function normalizeType(raw: string): string {
   if (t.includes('TIMESTAMP')) return 'TIMESTAMP'
   if (t === 'DATE') return 'DATE'
   if (t === 'TIME') return 'TIME'
+  if (t === 'JSON') return 'JSON'
+  // DuckDB complex types from read_json_auto: STRUCT(...), MAP(...), []
+  if (t.startsWith('STRUCT') || t.startsWith('MAP') || t.startsWith('UNION')) return 'JSON'
+  if (t.endsWith('[]') || t.startsWith('LIST') || t.startsWith('[')) return 'ARRAY'
   return raw
 }
 

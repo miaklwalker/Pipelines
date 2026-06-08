@@ -171,6 +171,7 @@ export default function Sidebar({ onAdd }: Props) {
   const outputs  = defs.filter((d) => d.category === 'output')
   const emitters = defs.filter((d) => d.category === 'emitter')
   const database = defs.filter((d) => d.category === 'database')
+  const api      = defs.filter((d) => d.category === 'api')
 
   return (
     <aside className="sidebar" style={{ width }}>
@@ -197,6 +198,13 @@ export default function Sidebar({ onAdd }: Props) {
         <>
           <div className="sidebar-section-title sidebar-section-title-db" style={{ marginTop: 10 }}>Database</div>
           <SectionCards defs={database} cols={cols} onAdd={onAdd} />
+        </>
+      )}
+
+      {api.length > 0 && (
+        <>
+          <div className="sidebar-section-title" style={{ marginTop: 10, color: '#f97316' }}>API</div>
+          <SectionCards defs={api} cols={cols} onAdd={onAdd} />
         </>
       )}
 

@@ -34,6 +34,7 @@ import type {
   BrowseSchemaNodeData,
   MaterializeNodeData,
   ReportNodeData,
+  ApiGetNodeData, ApiBodyNodeData, ApiAuthNodeData, ApiPaginatedNodeData,
   PreviewResult, ReportResult,
 } from './lib/types'
 
@@ -51,6 +52,7 @@ function edgeClass(connection: Connection | AppEdge): string {
   if (src === 'seq-out')          return 'seq-edge'
   if (src.startsWith('col-') || src === 'col-out') return 'col-edge'
   if (src === 'conn-out')         return 'conn-edge'
+  if (src === 'token-out')        return 'token-edge'
   if (tgt === 'anchor-in')        return 'row-edge anchor-edge'
   if (src === 'row-out-pass')     return 'row-edge row-edge-pass'
   if (src === 'row-out-fail')     return 'row-edge row-edge-fail'
@@ -342,7 +344,7 @@ export default function App() {
     setEdges((es) => {
       const tgt = connection.targetHandle ?? ''
       const shouldReplace = tgt.startsWith('row-') || tgt.startsWith('col-')
-        || tgt === 'val-in' || tgt === 'anchor-in' || tgt === 'conn-in'
+        || tgt === 'val-in' || tgt === 'anchor-in' || tgt === 'conn-in' || tgt === 'token-in'
       const filtered = shouldReplace
         ? es.filter((e) => !(e.target === connection.target && e.targetHandle === connection.targetHandle))
         : es
@@ -365,14 +367,16 @@ export default function App() {
     // Column handles (emitters use plain 'col-out', others use 'col-out-{name}')
     const srcCol  = src.startsWith('col-out-') || src === 'col-out'
     const tgtCol  = tgt.startsWith('col-in-')
-    const srcConn = src === 'conn-out'
-    const tgtConn = tgt === 'conn-in'
-    const srcSeq  = src === 'seq-out'
-    const tgtSeq  = tgt === 'seq-in'
+    const srcConn  = src === 'conn-out'
+    const tgtConn  = tgt === 'conn-in'
+    const srcSeq   = src === 'seq-out'
+    const tgtSeq   = tgt === 'seq-in'
+    const srcToken = src === 'token-out'
+    const tgtToken = tgt === 'token-in'
     if (tgt === 'col-in-carry') {
       return sourceNode?.type === 'increment-value' && src === 'col-out'
     }
-    return (srcRow && tgtRow) || (srcCol && tgtCol) || (srcConn && tgtConn) || (srcSeq && tgtSeq)
+    return (srcRow && tgtRow) || (srcCol && tgtCol) || (srcConn && tgtConn) || (srcSeq && tgtSeq) || (srcToken && tgtToken)
   }, [])
 
   // ── Canvas click → clear selection ───────────────────────────────────────
@@ -697,6 +701,48 @@ export default function App() {
         setNodes((ns) => [...ns, {
           id: uuid(), type: 'browse-schema', position: spawnPosition(),
           data: { tables: [], selectedSchema: null, selectedTable: null, filter: '', csvPath: null, columns: [], rowCount: null, status: 'idle', resolvedConfig: null } satisfies BrowseSchemaNodeData,
+        }])
+        break
+      case 'api-get':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'api-get', position: spawnPosition(),
+          data: { method: 'GET', url: '', headers: [], jsonPath: null, columns: [], rowCount: null, status: 'idle' } satisfies ApiGetNodeData,
+        }])
+        break
+      case 'api-delete':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'api-delete', position: spawnPosition(),
+          data: { method: 'DELETE', url: '', headers: [], jsonPath: null, columns: [], rowCount: null, status: 'idle' } satisfies ApiGetNodeData,
+        }])
+        break
+      case 'api-post':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'api-post', position: spawnPosition(),
+          data: { method: 'POST', url: '', headers: [], bodyMode: 'static', staticBody: '', jsonPath: null, columns: [], rowCount: null, status: 'idle', inputColumns: [] } satisfies ApiBodyNodeData,
+        }])
+        break
+      case 'api-put':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'api-put', position: spawnPosition(),
+          data: { method: 'PUT', url: '', headers: [], bodyMode: 'static', staticBody: '', jsonPath: null, columns: [], rowCount: null, status: 'idle', inputColumns: [] } satisfies ApiBodyNodeData,
+        }])
+        break
+      case 'api-patch':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'api-patch', position: spawnPosition(),
+          data: { method: 'PATCH', url: '', headers: [], bodyMode: 'static', staticBody: '', jsonPath: null, columns: [], rowCount: null, status: 'idle', inputColumns: [] } satisfies ApiBodyNodeData,
+        }])
+        break
+      case 'api-auth':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'api-auth', position: spawnPosition(),
+          data: { method: 'POST', url: '', headers: [], body: '', tokenPath: '$.access_token', headerName: 'Authorization', headerTemplate: 'Bearer {{token}}', status: 'idle' } satisfies ApiAuthNodeData,
+        }])
+        break
+      case 'api-paginated':
+        setNodes((ns) => [...ns, {
+          id: uuid(), type: 'api-paginated', position: spawnPosition(),
+          data: { url: '', headers: [], strategy: 'page', pageParam: 'page', pageStart: 1, offsetParam: 'offset', limitParam: 'limit', limitValue: 100, cursorPath: '', cursorParam: 'cursor', cursorIn: 'query', dataPath: '', maxPages: 100, failOnError: false, jsonPath: null, columns: [], rowCount: null, status: 'idle' } satisfies ApiPaginatedNodeData,
         }])
         break
     }

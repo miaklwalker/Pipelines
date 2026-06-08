@@ -8,6 +8,7 @@ import type {
   BrowseSchemaNodeData, JoinColSelection,
   MaterializeNodeData,
   ReportNodeData,
+  ApiGetNodeData, ApiBodyNodeData, ApiPaginatedNodeData,
   ColumnInfo,
 } from './types'
 
@@ -262,19 +263,23 @@ export function buildNodeSQL(
         return trimmed.startsWith('$') ? trimmed : `$.${trimmed.replace(/^\.?/, '')}`
       }
 
+      // Wrap with to_json() so this works whether the column is a VARCHAR JSON string
+      // (e.g. from a raw text field) or a DuckDB STRUCT/LIST type (e.g. from read_json_auto).
+      const srcExpr = `to_json("${sourceColumn}")`
+
       const extractExpr = (field: JsonExtractField) => {
         const path = normalizePath(field.path)
         switch (field.type) {
           case 'TEXT':
-            return `json_extract_string("${sourceColumn}", '${path}')`
+            return `json_extract_string(${srcExpr}, '${path}')`
           case 'INTEGER':
-            return `CAST(json_extract("${sourceColumn}", '${path}') AS BIGINT)`
+            return `CAST(json_extract(${srcExpr}, '${path}') AS BIGINT)`
           case 'DOUBLE':
-            return `CAST(json_extract("${sourceColumn}", '${path}') AS DOUBLE)`
+            return `CAST(json_extract(${srcExpr}, '${path}') AS DOUBLE)`
           case 'BOOLEAN':
-            return `CAST(json_extract("${sourceColumn}", '${path}') AS BOOLEAN)`
+            return `CAST(json_extract(${srcExpr}, '${path}') AS BOOLEAN)`
           case 'JSON':
-            return `json_extract("${sourceColumn}", '${path}')`
+            return `json_extract(${srcExpr}, '${path}')`
         }
       }
 
@@ -643,6 +648,27 @@ export function buildNodeSQL(
       return `SELECT * FROM read_parquet('${escapePath(d.parquetPath)}')`
     }
 
+    case 'api-get':
+    case 'api-delete': {
+      const d = node.data as ApiGetNodeData
+      if (!d.jsonPath) return null
+      return `SELECT * FROM read_json_auto('${escapePath(d.jsonPath)}', format='array')`
+    }
+
+    case 'api-post':
+    case 'api-put':
+    case 'api-patch': {
+      const d = node.data as ApiBodyNodeData
+      if (!d.jsonPath) return null
+      return `SELECT * FROM read_json_auto('${escapePath(d.jsonPath)}', format='array')`
+    }
+
+    case 'api-paginated': {
+      const d = node.data as ApiPaginatedNodeData
+      if (!d.jsonPath) return null
+      return `SELECT * FROM read_json_auto('${escapePath(d.jsonPath)}', format='array')`
+    }
+
     case 'filter': {
       const d = node.data as FilterNodeData
       const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
@@ -944,6 +970,18 @@ export function getNodeOutputColumns(
 
     case 'materialize':
       return (node.data as MaterializeNodeData).columns ?? []
+
+    case 'api-get':
+    case 'api-delete':
+      return (node.data as ApiGetNodeData).columns ?? []
+
+    case 'api-post':
+    case 'api-put':
+    case 'api-patch':
+      return (node.data as ApiBodyNodeData).columns ?? []
+
+    case 'api-paginated':
+      return (node.data as ApiPaginatedNodeData).columns ?? []
 
     case 'merge':
       return (node.data as MergeNodeData).inputColumns ?? []

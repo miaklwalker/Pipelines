@@ -43,6 +43,7 @@ html, body, #root {
 .react-flow__edge.anchor-edge  .react-flow__edge-path { stroke: #f59e0b; stroke-dasharray: 5,3; stroke-width: 1.5; }
 .react-flow__edge.conn-edge    .react-flow__edge-path { stroke: #7c3aed; stroke-dasharray: 6,3; stroke-width: 1.5; }
 .react-flow__edge.seq-edge     .react-flow__edge-path { stroke: #ef4444; stroke-dasharray: 4,3; stroke-width: 1.5; }
+.react-flow__edge.token-edge   .react-flow__edge-path { stroke: #f97316; stroke-dasharray: 5,3; stroke-width: 1.5; }
 .react-flow__edge.selected      .react-flow__edge-path { stroke: #fff; stroke-width: 2.5; }
 
 /* ── Edge focus: dim unrelated, fade upstream by depth ── */

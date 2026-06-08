@@ -17,7 +17,7 @@ export interface NodeDef<D = any> {
   /** ReactFlow node type key */
   type: string
   /** Sidebar grouping */
-  category: 'input' | 'operation' | 'output' | 'emitter' | 'database'
+  category: 'input' | 'operation' | 'output' | 'emitter' | 'database' | 'api'
   /** Display name */
   name: string
   /** One-line description shown in the sidebar */
