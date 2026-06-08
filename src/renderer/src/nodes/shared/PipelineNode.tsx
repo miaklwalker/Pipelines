@@ -14,7 +14,7 @@ import {
   type ReactNode,
   type CSSProperties,
 } from 'react'
-import { Handle, Position, useNodeId, useReactFlow, useNodeConnections } from '@xyflow/react'
+import { Handle, Position, useNodeId, useReactFlow, useNodeConnections, useEdges } from '@xyflow/react'
 import { useNodeColors } from '../../contexts/NodeColorContext'
 import { seqHandle } from './handles'
 
@@ -24,6 +24,8 @@ interface CollapseCtxValue {
   collapsed: boolean
   /** True once a ColumnList with >0 columns has mounted under this node */
   hasColumnList: boolean
+  /** True when at least one col-out edge is connected — collapse is blocked */
+  hasColumnConnections: boolean
   toggle: () => void
   /** Called by ColumnList on mount (with columns) */
   register: () => void
@@ -34,6 +36,7 @@ interface CollapseCtxValue {
 const NodeCollapseContext = createContext<CollapseCtxValue>({
   collapsed: false,
   hasColumnList: false,
+  hasColumnConnections: false,
   toggle: () => {},
   register: () => {},
   unregister: () => {},
@@ -96,6 +99,13 @@ export function PipelineNode({ selected, children, title = 'Click to preview', c
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const collapsed = ((getNode(id)?.data ?? {}) as any).columnsCollapsed ?? false
 
+  // Detect active column edges — collapsing while these exist would unmount
+  // their handles and cause React Flow to warn about missing source/targets.
+  const allEdges = useEdges()
+  const hasColumnConnections = allEdges.some(
+    (e) => e.source === id && (e.sourceHandle?.startsWith('col-out') ?? false)
+  )
+
   const toggle = useCallback(() => {
     setNodes((ns) =>
       ns.map((n) =>
@@ -129,7 +139,7 @@ export function PipelineNode({ selected, children, title = 'Click to preview', c
     : undefined
 
   return (
-    <NodeCollapseContext.Provider value={{ collapsed, hasColumnList, toggle, register, unregister }}>
+    <NodeCollapseContext.Provider value={{ collapsed, hasColumnList, hasColumnConnections, toggle, register, unregister }}>
       <div className={cls} title={title} style={style}>
         {stripeGradient && (
           <div className="node-accent-stripe" style={{ background: stripeGradient }} />

@@ -58,7 +58,7 @@ export default function NodeHeader({ def, id, subtitle, advancedOpen, onAdvanced
   const displayTitle = meta.nodeLabel || name
 
   // Collapse context — shared with ColumnList via PipelineNode
-  const { collapsed, hasColumnList, toggle } = useNodeCollapse()
+  const { collapsed, hasColumnList, hasColumnConnections, toggle } = useNodeCollapse()
 
   // Color context — app-level
   const { userColors, setUserColor } = useNodeColors()
@@ -126,8 +126,8 @@ export default function NodeHeader({ def, id, subtitle, advancedOpen, onAdvanced
         </div>
 
         <div className="node-header-actions">
-          {/* Collapse columns toggle — only shown when a ColumnList is present */}
-          {hasColumnList && (
+          {/* Collapse columns toggle — hidden when column handles have active connections */}
+          {hasColumnList && !hasColumnConnections && (
             <button
               className={`node-icon-btn${collapsed ? ' node-icon-btn-active' : ''}`}
               onClick={handleCollapse}
