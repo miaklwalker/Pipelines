@@ -300,11 +300,17 @@ export interface DefaultValueData extends Record<string, unknown> {
 }
 
 export interface CsvBase64Data extends Record<string, unknown> {
-  fileName: string      // display name
-  filePath: string      // original path (for re-encode on reload)
-  base64: string        // base64-encoded file contents
   columnName: string    // output column name
+  base64: string        // base64-encoded contents (set by either mode)
+  // File mode
+  fileName: string      // display name of the picked file
+  filePath: string      // original path (for re-encode on reload)
   hasAnchor?: boolean
+  // Row mode (when a row-in is wired)
+  hasRowIn?: boolean
+  rowCount?: number     // number of rows that were encoded
+  encodeStatus?: 'idle' | 'encoding' | 'done' | 'error'
+  encodeError?: string
 }
 
 export interface MaterializeNodeData extends Record<string, unknown> {

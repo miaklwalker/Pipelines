@@ -261,6 +261,34 @@ ipcMain.handle('csv:export', async (_, {
   })
 })
 
+// Execute a SQL query, export as CSV, and return the result base64-encoded
+ipcMain.handle('db:rows-to-base64', async (_, { sql }: { sql: string }): Promise<{ base64: string; rowCount: number }> => {
+  const tmpDir = join(app.getPath('temp'), 'pipelines-b64')
+  if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true })
+  const csvPath = join(tmpDir, 'b64-' + Date.now() + '.csv')
+  const safePath = csvPath.replace(/'/g, "''")
+
+  await new Promise<void>((resolve, reject) => {
+    conn.run(`COPY (${sql}) TO '${safePath}' (FORMAT CSV, HEADER true)`, (err) => {
+      if (err) reject(new Error(err.message))
+      else resolve()
+    })
+  })
+
+  const buffer = await fs.readFile(csvPath)
+  try { await fs.unlink(csvPath) } catch { /* ignore */ }
+
+  const rowCount = await new Promise<number>((resolve, reject) => {
+    conn.all(`SELECT COUNT(*) AS cnt FROM (${sql}) __c`, (err, rows) => {
+      if (err) return reject(new Error(err.message))
+      const cnt = (rows as { cnt: number | bigint }[])?.[0]?.cnt
+      resolve(cnt == null ? 0 : Number(cnt))
+    })
+  })
+
+  return { base64: buffer.toString('base64'), rowCount }
+})
+
 // Select any file and return its contents as a base64 string
 ipcMain.handle('file:select-base64', async (_, { filters }: { filters?: { name: string; extensions: string[] }[] }): Promise<{ filePath: string; fileName: string; base64: string } | null> => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
