@@ -279,6 +279,34 @@ export interface ConditionalOutputData extends Record<string, unknown> {
   hasAnchor?: boolean
 }
 
+export interface JsonObjectField {
+  id: string
+  key: string          // JSON key name
+  sourceColumn: string // upstream column name to use as value
+}
+
+export interface BuildJsonObjectData extends Record<string, unknown> {
+  columnName: string        // output column name
+  fields: JsonObjectField[]
+  hasAnchor?: boolean
+}
+
+export interface DefaultValueData extends Record<string, unknown> {
+  targetColumn: string  // column whose NULLs are filled
+  defaultValue: string  // literal fallback when col-in is not wired
+  hasRowIn?: boolean
+  hasColIn?: boolean    // true when a col-in emitter is wired
+  inputColumns: ColumnInfo[]
+}
+
+export interface CsvBase64Data extends Record<string, unknown> {
+  fileName: string      // display name
+  filePath: string      // original path (for re-encode on reload)
+  base64: string        // base64-encoded file contents
+  columnName: string    // output column name
+  hasAnchor?: boolean
+}
+
 export interface MaterializeNodeData extends Record<string, unknown> {
   /** Path to the written parquet file; null = not yet materialized */
   parquetPath: string | null
@@ -410,6 +438,9 @@ export type AppNode =
   | Node<UniqueNodeData,         'unique'>
   | Node<MapValueData,           'map-value'>
   | Node<ConditionalOutputData,  'conditional-output'>
+  | Node<BuildJsonObjectData,    'build-json-object'>
+  | Node<DefaultValueData,       'default-value'>
+  | Node<CsvBase64Data,          'csv-base64'>
   | Node<SortNodeData,            'sort'>
   | Node<LimitNodeData,           'limit'>
   | Node<AggregateNodeData,       'aggregate'>

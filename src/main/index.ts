@@ -261,6 +261,20 @@ ipcMain.handle('csv:export', async (_, {
   })
 })
 
+// Select any file and return its contents as a base64 string
+ipcMain.handle('file:select-base64', async (_, { filters }: { filters?: { name: string; extensions: string[] }[] }): Promise<{ filePath: string; fileName: string; base64: string } | null> => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Select File',
+    properties: ['openFile'],
+    filters: filters ?? [{ name: 'All Files', extensions: ['*'] }],
+  })
+  if (canceled || !filePaths[0]) return null
+  const filePath = filePaths[0]
+  const buffer = await fs.readFile(filePath)
+  const fileName = filePath.split('/').pop() ?? filePath.split('\\').pop() ?? filePath
+  return { filePath, fileName, base64: buffer.toString('base64') }
+})
+
 // Pick a CSV output path without executing an export
 ipcMain.handle('csv:pick-path', async (_, { defaultPath }: { defaultPath?: string }): Promise<string | null> => {
   const { canceled, filePath } = await dialog.showSaveDialog({

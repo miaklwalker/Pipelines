@@ -25,6 +25,8 @@ const api = {
     ipcRenderer.invoke('csv:export', { sql, delimiter, includeHeader, defaultPath, skipDialogIfDefaultPath }),
   pickCSVPath: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('csv:pick-path', { defaultPath }),
+  selectFileBase64: (filters?: { name: string; extensions: string[] }[]): Promise<{ filePath: string; fileName: string; base64: string } | null> =>
+    ipcRenderer.invoke('file:select-base64', { filters }),
   // DuckDB preview
   dbPreview: (sql: string): Promise<PreviewResult> => ipcRenderer.invoke('db:preview', { sql }),
   // DuckDB profile — per-column data-quality stats for the Report node

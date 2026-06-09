@@ -31,6 +31,7 @@ declare global {
         skipDialogIfDefaultPath?: boolean
       ) => Promise<ExportResult | null>
       pickCSVPath:  (defaultPath?: string) => Promise<string | null>
+      selectFileBase64: (filters?: { name: string; extensions: string[] }[]) => Promise<{ filePath: string; fileName: string; base64: string } | null>
 
       // ── DuckDB ─────────────────────────────────────────────────────────────
       dbPreview:    (sql: string) => Promise<PreviewResult>
