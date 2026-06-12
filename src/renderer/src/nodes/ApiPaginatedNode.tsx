@@ -1,13 +1,14 @@
 import { memo, useState, useCallback } from 'react'
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useReactFlow, useNodeConnections, type NodeProps } from '@xyflow/react'
 import { Layers, Play, Loader, CheckCircle, AlertCircle } from 'lucide-react'
 import type { AppNode, AppEdge, ApiPaginatedNodeData, PaginationStrategy } from '../lib/types'
+import { executeApiNode } from '../lib/apiExec'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, tokenHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
-import { resolveToken, buildHeaders, formatLastFetched, HeadersEditor } from './ApiGetNode'
+import { formatLastFetched, HeadersEditor } from './ApiGetNode'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -32,34 +33,22 @@ function ApiPaginatedNodeComponent({ id, data, selected }: Props) {
     [id, setNodes]
   )
 
-  const tokenConnected = (getEdges() as AppEdge[]).some((e) => e.target === id && e.targetHandle === 'token-in')
+  // Reactive — re-renders when the token wire is connected/removed
+  const tokenConnected = useNodeConnections({ handleType: 'target', handleId: 'token-in' }).length > 0
 
   const handleFetch = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!url.trim()) { update({ status: 'error', error: 'Enter a URL first' }); return }
     update({ status: 'fetching', error: undefined })
     try {
-      const hdrs = buildHeaders(headers)
-      const tok = resolveToken(id, getEdges as () => AppEdge[], getNodes as () => AppNode[])
-      if (tok) hdrs[tok.headerName] = tok.headerValue
-
-      const result = await window.api.apiPaginated({
-        url: url.trim(), headers: hdrs, strategy, nodeId: id,
-        pageParam, pageStart, offsetParam, limitParam, limitValue,
-        cursorPath, cursorParam, cursorIn,
-        dataPath: dataPath.trim() || undefined,
-        maxPages, failOnError,
-      })
-
-      update({
-        jsonPath: result.jsonPath, columns: result.columns, rowCount: result.rowCount,
-        pagesFetched: result.pagesFetched, hadErrors: result.hadErrors,
-        status: 'done', error: undefined, lastFetched: new Date().toISOString(),
-      })
+      const nodes = getNodes() as AppNode[]
+      const edges = getEdges() as AppEdge[]
+      const node = nodes.find((n) => n.id === id)
+      if (!node) return
+      update(await executeApiNode(node, nodes, edges))
     } catch (err) {
       update({ status: 'error', error: err instanceof Error ? err.message : String(err) })
     }
-  }, [id, url, headers, strategy, pageParam, pageStart, offsetParam, limitParam, limitValue, cursorPath, cursorParam, cursorIn, dataPath, maxPages, failOnError, getEdges, getNodes, update])
+  }, [id, getEdges, getNodes, update])
 
   const hasOutput = !!data.jsonPath && columns.length > 0
   const isLoading = status === 'fetching'

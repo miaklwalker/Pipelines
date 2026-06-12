@@ -1,33 +1,15 @@
 import { memo, useState, useCallback } from 'react'
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useReactFlow, useNodeConnections, type NodeProps } from '@xyflow/react'
 import { Globe, Play, Loader, CheckCircle, AlertCircle, Plus, Trash2 } from 'lucide-react'
-import type { AppNode, AppEdge, ApiGetNodeData, ApiAuthNodeData, ApiHeader } from '../lib/types'
+import type { AppNode, AppEdge, ApiGetNodeData, ApiHeader } from '../lib/types'
+import { executeApiNode } from '../lib/apiExec'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, tokenHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
-
-export function resolveToken(id: string, getEdges: () => AppEdge[], getNodes: () => AppNode[]) {
-  const tokenEdge = (getEdges() as AppEdge[]).find((e) => e.target === id && e.targetHandle === 'token-in')
-  if (!tokenEdge) return null
-  const authNode = (getNodes() as AppNode[]).find((n) => n.id === tokenEdge.source && n.type === 'api-auth')
-  if (!authNode) return null
-  const d = authNode.data as ApiAuthNodeData
-  if (!d.token) return null
-  return {
-    headerName: d.headerName || 'Authorization',
-    headerValue: (d.headerTemplate || 'Bearer {{token}}').replace('{{token}}', d.token),
-  }
-}
-
-export function buildHeaders(headers: ApiHeader[]): Record<string, string> {
-  const h: Record<string, string> = {}
-  headers.forEach((hdr) => { if (hdr.key.trim()) h[hdr.key.trim()] = hdr.value })
-  return h
-}
+// ── Shared UI helpers (request logic lives in lib/apiExec.ts) ─────────────────
 
 export function formatLastFetched(ts?: string): string {
   if (!ts) return ''
@@ -101,22 +83,22 @@ function ApiGetNodeComponent({ id, data, selected }: Props) {
     [id, setNodes]
   )
 
-  const tokenConnected = (getEdges() as AppEdge[]).some((e) => e.target === id && e.targetHandle === 'token-in')
+  // Reactive — re-renders when the token wire is connected/removed
+  const tokenConnected = useNodeConnections({ handleType: 'target', handleId: 'token-in' }).length > 0
 
   const handleFetch = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!url.trim()) { update({ status: 'error', error: 'Enter a URL first' }); return }
     update({ status: 'fetching', error: undefined })
     try {
-      const hdrs = buildHeaders(headers)
-      const tok = resolveToken(id, getEdges as () => AppEdge[], getNodes as () => AppNode[])
-      if (tok) hdrs[tok.headerName] = tok.headerValue
-      const result = await window.api.apiFetch({ url: url.trim(), method: data.method, headers: hdrs, nodeId: id })
-      update({ jsonPath: result.jsonPath, columns: result.columns, rowCount: result.rowCount, status: 'done', error: undefined, lastFetched: new Date().toISOString() })
+      const nodes = getNodes() as AppNode[]
+      const edges = getEdges() as AppEdge[]
+      const node = nodes.find((n) => n.id === id)
+      if (!node) return
+      update(await executeApiNode(node, nodes, edges))
     } catch (err) {
       update({ status: 'error', error: err instanceof Error ? err.message : String(err) })
     }
-  }, [id, url, headers, data.method, getEdges, getNodes, update])
+  }, [id, getEdges, getNodes, update])
 
   const hasOutput = !!data.jsonPath && columns.length > 0
   const isLoading = status === 'fetching'

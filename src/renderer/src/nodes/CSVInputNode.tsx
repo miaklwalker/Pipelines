@@ -6,20 +6,11 @@ import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, colHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
-import { ColumnList } from './shared/columns'
+import { ColumnList, typeBadgeClass } from './shared/columns'
 import { truncatePath } from '../lib/graphUtils'
 
-// ── Type badge ────────────────────────────────────────────────────────────────
-export function typeBadgeClass(type: string): string {
-  const t = type.toLowerCase()
-  if (t === 'integer')   return 'type-integer'
-  if (t === 'float')     return 'type-float'
-  if (t === 'text')      return 'type-text'
-  if (t === 'boolean')   return 'type-boolean'
-  if (t === 'date')      return 'type-date'
-  if (t === 'timestamp') return 'type-timestamp'
-  return 'type-default'
-}
+// Re-export for older imports — the canonical definition lives in shared/columns.
+export { typeBadgeClass }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: CSVNodeData }>

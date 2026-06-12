@@ -6,7 +6,8 @@ import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { tokenHandle } from './shared/handles'
-import { buildHeaders, formatLastFetched, HeadersEditor } from './ApiGetNode'
+import { buildHeaders } from '../lib/apiExec'
+import { formatLastFetched, HeadersEditor } from './ApiGetNode'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 

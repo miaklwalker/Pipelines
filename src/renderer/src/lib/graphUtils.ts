@@ -14,51 +14,9 @@ export function truncatePath(path: string): string {
 }
 
 // ── Upstream node traversal ───────────────────────────────────────────────────
-/**
- * Returns the set of node IDs that are upstream ancestors of `nodeId`
- * through row-stream edges only (col-out-* and conn-out edges are skipped
- * because they carry column values / DB connections, not row streams).
- */
-export function getUpstreamNodeIds(nodeId: string, edges: AppEdge[]): Set<string> {
-  const rowEdges = edges.filter((e) => {
-    const sh = e.sourceHandle ?? ''
-    return !sh.startsWith('col-') && sh !== 'conn-out'
-  })
-
-  const visited = new Set<string>()
-  const queue = [nodeId]
-
-  while (queue.length) {
-    const current = queue.shift()!
-    for (const e of rowEdges) {
-      if (e.target === current && !visited.has(e.source)) {
-        visited.add(e.source)
-        queue.push(e.source)
-      }
-    }
-  }
-
-  return visited
-}
-
-/** Returns the set of node IDs strictly downstream of `nodeId` (via all edge types). */
-export function getDownstreamNodeIds(nodeId: string, edges: AppEdge[]): Set<string> {
-  const seen = new Set<string>()
-  let frontier = [nodeId]
-  while (frontier.length) {
-    const next: string[] = []
-    for (const sid of frontier) {
-      for (const e of edges) {
-        if (e.source === sid && !seen.has(e.target)) {
-          seen.add(e.target)
-          next.push(e.target)
-        }
-      }
-    }
-    frontier = next
-  }
-  return seen
-}
+// Edge-walking helpers live in traversal.ts; re-exported for existing callers.
+export { getUpstreamNodeIds, getDownstreamNodeIds, isRowStreamEdge } from './traversal'
+import { isRowStreamEdge } from './traversal'
 
 // ── Node color propagation ─────────────────────────────────────────────────────
 /**
@@ -78,11 +36,8 @@ export function computeNodeDisplayColors(
   edges: AppEdge[],
   userColors: Record<string, string>,
 ): Record<string, string[]> {
-  // Only row-stream edges propagate colour
-  const rowEdges = edges.filter((e) => {
-    const sh = e.sourceHandle ?? ''
-    return !sh.startsWith('col-') && sh !== 'conn-out'
-  })
+  // Only row-stream edges propagate colour (seq/token/col/conn edges don't)
+  const rowEdges = edges.filter(isRowStreamEdge)
 
   // Build adjacency + in-degree for topological sort (Kahn's algorithm)
   const children = new Map<string, string[]>(nodes.map((n) => [n.id, []]))
@@ -126,6 +81,7 @@ import type {
   ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData,
   UnnestNodeData, JsonExtractNodeData,
   DefaultValueData, CheckReferenceData, IncrementValueData,
+  UpdateDbRowNodeData,
 } from './types'
 
 function sourceColumnFromHandle(sourceHandle: string | null | undefined): string | null {
@@ -307,6 +263,37 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
         }
       }
       return { ...node, data: { ...node.data, resolvedConfig: null, inputColumns: inputCols } }
+    }
+
+    // ── Update DB Row — resolvedConfig + inputColumns (updateColumns filtered to live cols) ─
+    if (node.type === 'update-db-row') {
+      const d = node.data as UpdateDbRowNodeData
+      const connEdge  = edges.find((e) => e.target === node.id && e.targetHandle === 'conn-in')
+      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
+      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
+      const inputColNames = new Set(inputCols.map((c) => c.name))
+      const updateColumns = (d.updateColumns ?? []).filter((c) => inputColNames.has(c))
+      if (connEdge) {
+        const connNode = nodes.find((n) => n.id === connEdge.source && n.type === 'connection')
+        if (connNode) {
+          const { config } = connNode.data as ConnectionNodeData
+          return { ...node, data: { ...d, resolvedConfig: config, inputColumns: inputCols, updateColumns } }
+        }
+      }
+      return { ...node, data: { ...d, resolvedConfig: null, inputColumns: inputCols, updateColumns } }
+    }
+
+    // ── Raw Query — copy resolved PG config from ConnectionNode ──────────────
+    if (node.type === 'raw-query') {
+      const connEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'conn-in')
+      if (connEdge) {
+        const connNode = nodes.find((n) => n.id === connEdge.source && n.type === 'connection')
+        if (connNode) {
+          const { config } = connNode.data as ConnectionNodeData
+          return { ...node, data: { ...node.data, resolvedConfig: config } }
+        }
+      }
+      return { ...node, data: { ...node.data, resolvedConfig: null } }
     }
 
     // ── DB read/browse nodes — copy resolved PG config from ConnectionNode ──────

@@ -14,7 +14,7 @@ type Props = NodeProps<AppNode & { data: CSVOutputNodeData }>
 
 type ExportStatus = 'idle' | 'running' | 'done' | 'error'
 
-const DELIMITER_OPTIONS = [
+export const DELIMITER_OPTIONS = [
   { value: 'comma',     label: 'Comma  ,',    char: ',' },
   { value: 'semicolon', label: 'Semicolon ;', char: ';' },
   { value: 'pipe',      label: 'Pipe  |',     char: '|' },
@@ -22,6 +22,11 @@ const DELIMITER_OPTIONS = [
 ] as const
 
 type DelimiterKey = (typeof DELIMITER_OPTIONS)[number]['value']
+
+/** Map a stored delimiter key to its character (shared with App's run loop). */
+export function delimiterChar(key: unknown): string {
+  return DELIMITER_OPTIONS.find((d) => d.value === key)?.char ?? ','
+}
 
 function CSVOutputNode({ id, data, selected }: Props) {
   const { getNodes, getEdges, setNodes } = useReactFlow()
@@ -52,8 +57,7 @@ function CSVOutputNode({ id, data, selected }: Props) {
     setErrorMsg('')
 
     try {
-      const delimChar = DELIMITER_OPTIONS.find((d) => d.value === delimiter)?.char ?? ','
-      const result = await window.api.exportCSV(sql, delimChar, includeHeader, outputPath || undefined)
+      const result = await window.api.exportCSV(sql, delimiterChar(delimiter), includeHeader, outputPath || undefined)
       if (!result) { setStatus('idle'); return }
       update({
         outputPath: result.filePath,

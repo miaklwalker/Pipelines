@@ -3,18 +3,15 @@ import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { HardDrive, Loader, CheckCircle, AlertCircle, RefreshCw, Trash2 } from 'lucide-react'
 import type { AppNode, ReadTableCachedNodeData } from '../lib/types'
 import { propagateColumns } from '../lib/graphUtils'
+import { buildPgTableQuery } from '../lib/sqlBuilder'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
-import { rowHandle, colHandle, connHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
-import { typeBadgeClass } from './CSVInputNode'
+import { rowHandle, connHandle, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
 import SchemaTableBrowser from './shared/SchemaTableBrowser'
 import { usePipelineActions } from '../contexts/PipelineActionsContext'
 
-function quoteIdent(v: string): string {
-  return `"${v.replace(/"/g, '""')}"`
-}
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: ReadTableCachedNodeData }>
 
@@ -25,6 +22,7 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
     csvPath = null, columns = [], rowCount = null,
     status = 'idle', error, resolvedConfig, cacheDate = null,
     dbTables = [], dbSelectedSchema = null, dbSelectedTable = null, dbStatus = 'idle', dbError,
+    cascadeRun = false,
   } = data
   const [dbFilter, setDbFilter] = useState('')
 
@@ -37,9 +35,7 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
   )
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
-  const tableQuery = tableName
-    ? `SELECT * FROM ${dbSelectedSchema ? `${quoteIdent(dbSelectedSchema)}.` : ''}${quoteIdent(tableName)}`
-    : ''
+  const tableQuery = tableName ? buildPgTableQuery(dbSelectedSchema, tableName) : ''
   const query = readMode === 'table' ? tableQuery : customSQL
 
   const handleBrowse = useCallback(async (e: React.MouseEvent) => {
@@ -62,7 +58,6 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
     if (!resolvedConfig || !query) return
     update({ status: 'fetching', error: undefined })
     try {
-      //@ts-ignore
       const result = await window.api.pgFetchCached(resolvedConfig, query, force)
       setNodes((ns) => {
         const updated = ns.map((n) => n.id === id
@@ -71,11 +66,15 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
         )
         return propagateColumns(updated as AppNode[], getEdges() as ReturnType<typeof getEdges>)
       })
-      runDownstreamSinks(id)
+      // Cascade only when enabled AND the data actually changed (a real DB
+      // fetch) — "Use Cache" hits must never kick off downstream writes.
+      if (cascadeRun && !result.fromCache) {
+        runDownstreamSinks(id)
+      }
     } catch (err) {
       update({ status: 'error', error: String(err) })
     }
-  }, [id, resolvedConfig, query, update, setNodes, getEdges, runDownstreamSinks])
+  }, [id, resolvedConfig, query, cascadeRun, update, setNodes, getEdges, runDownstreamSinks])
 
   const handleFetch = useCallback((e: React.MouseEvent) => { e.stopPropagation(); doFetch(false) }, [doFetch])
   const handleRefresh = useCallback((e: React.MouseEvent) => { e.stopPropagation(); doFetch(true) }, [doFetch])
@@ -84,7 +83,6 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
     e.stopPropagation()
     if (!csvPath) return
     try {
-      //@ts-ignore
       await window.api.pgClearCache(csvPath)
       setNodes((ns) => {
         const updated = ns.map((n) => n.id === id
@@ -93,7 +91,7 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
         )
         return propagateColumns(updated as AppNode[], getEdges() as ReturnType<typeof getEdges>)
       })
-    } catch (err) { /* ignore */ }
+    } catch { /* cache file already gone */ }
   }, [id, csvPath, setNodes, getEdges])
 
   const isConnected = !!resolvedConfig
@@ -226,6 +224,23 @@ function ReadTableCachedNode({ id, data, selected }: Props) {
           )}
         </div>
 
+        {/* Cascade control — opt-in downstream run after a real refresh */}
+        <div className="node-body-row" style={{ marginTop: 4 }}>
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 10.5, color: 'var(--text-dim)' }}
+            onClick={stopProp} onMouseDown={stopProp}
+            title="After a fresh fetch from the database, automatically re-run everything downstream (including intermediate Materialize nodes and output sinks). Cache hits never cascade."
+          >
+            <input
+              type="checkbox"
+              checked={cascadeRun}
+              onChange={(e) => update({ cascadeRun: e.target.checked })}
+              style={{ cursor: 'pointer', accentColor: 'var(--blue)' }}
+            />
+            Run downstream after refresh
+          </label>
+        </div>
+
         {error && <div className="db-error-msg">{error}</div>}
       </div>
 
@@ -258,7 +273,6 @@ export const readTableCachedDef: NodeDef<ReadTableCachedNodeData> = {
   category: 'database',
   name: 'Read (Cached)',
   desc: 'Fetch once, run from local cache',
-  //@ts-ignore
   Icon: HardDrive,
   help: {
     summary: 'Like Read Table, but saves the fetched data to a persistent local CSV. Subsequent pipeline runs use the cache without reconnecting to the database.',
@@ -269,6 +283,7 @@ export const readTableCachedDef: NodeDef<ReadTableCachedNodeData> = {
       '"Use Cache" loads from the local file without touching the database.',
       'Click the refresh icon to force a new fetch and overwrite the cache.',
       '"Clear Cache" deletes the local CSV — next run will fetch fresh data.',
+      'Enable "Run downstream after refresh" to re-run dependent outputs (and any Materialize nodes in between) whenever fresh data is fetched. Cache hits never cascade.',
     ],
   },
   inputPorts: [{ type: 'conn' }],
@@ -278,6 +293,7 @@ export const readTableCachedDef: NodeDef<ReadTableCachedNodeData> = {
     csvPath: null, columns: [], rowCount: null,
     status: 'idle', resolvedConfig: null, cacheDate: null,
     dbTables: [], dbSelectedSchema: null, dbSelectedTable: null, dbStatus: 'idle', dbError: undefined,
+    cascadeRun: false,
   }),
   Component: Memoized,
 }

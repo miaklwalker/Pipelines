@@ -12,9 +12,20 @@ import type {
   ApiGetNodeData, ApiBodyNodeData, ApiPaginatedNodeData,
   ColumnInfo,
 } from './types'
+import { getDownstreamNodeIds } from './traversal'
 
 function escapePath(p: string): string {
   return p.replace(/'/g, "''")
+}
+
+/** Quote a SQL identifier (shared by DuckDB and Postgres). */
+export function quoteIdent(v: string): string {
+  return `"${v.replace(/"/g, '""')}"`
+}
+
+/** The SELECT used by Read Table (Cached) and its refresh paths. */
+export function buildPgTableQuery(schema: string | null | undefined, table: string): string {
+  return `SELECT * FROM ${schema ? quoteIdent(schema) + '.' : ''}${quoteIdent(table)}`
 }
 
 /**
@@ -200,24 +211,6 @@ function getAnchorExposedColumns(nodeId: string, nodes: AppNode[], edges: AppEdg
   return getNodeOutputColumns(nodeId, nodes, edges)
 }
 
-/** Set of node ids strictly downstream of `nodeId` (its descendants), via edge source→target. */
-function getDownstreamNodeIds(nodeId: string, edges: AppEdge[]): Set<string> {
-  const seen = new Set<string>()
-  let frontier = [nodeId]
-  while (frontier.length) {
-    const next: string[] = []
-    for (const sid of frontier) {
-      for (const e of edges) {
-        if (e.source === sid && !seen.has(e.target)) {
-          seen.add(e.target)
-          next.push(e.target)
-        }
-      }
-    }
-    frontier = next
-  }
-  return seen
-}
 
 /**
  * Build the SQL query that produces the output of `nodeId`.

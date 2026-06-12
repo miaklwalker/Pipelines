@@ -16,30 +16,31 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { FolderOpen, Save, Play, Loader, RefreshCw } from 'lucide-react'
+import { FolderOpen, Save, Play, Loader, RefreshCw, RotateCcw, Square } from 'lucide-react'
 
 import { v4 as uuid } from 'uuid'
-import { buildNodeSQL, getNodeOutputColumns } from './lib/sqlBuilder'
-import { propagateColumns, computeNodeDisplayColors, getUpstreamNodeIds, getDownstreamNodeIds } from './lib/graphUtils'
+import { buildNodeSQL, getNodeOutputColumns, buildPgTableQuery } from './lib/sqlBuilder'
+import { propagateColumns, computeNodeDisplayColors, getUpstreamNodeIds } from './lib/graphUtils'
+import { isRowStreamEdge } from './lib/traversal'
+import { planExecution } from './lib/execution'
+import { executeApiNode } from './lib/apiExec'
+import { isCancelledError } from '../../shared/ipc'
 import { NodeColorProvider } from './contexts/NodeColorContext'
 import { PipelineActionsProvider } from './contexts/PipelineActionsContext'
 import type {
   AppNode, AppEdge,
-  CSVNodeData, JSONNodeData, UnnestNodeData, JsonExtractNodeData, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
-  MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
-  ConcatNodeData,
-  UniqueNodeData, MapValueData, ConditionalOutputData,
-  SortNodeData, LimitNodeData, AggregateNodeData,
+  CSVOutputNodeData, IncrementValueData,
+  MapValueData, ConditionalOutputData, LimitNodeData,
   ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
   BrowseSchemaNodeData,
   MaterializeNodeData,
-  ReportNodeData,
-  ApiGetNodeData, ApiBodyNodeData, ApiAuthNodeData, ApiPaginatedNodeData,
-  PreviewResult, ReportResult,
+  UpdateDbRowNodeData, RawQueryNodeData,
+  PreviewResult, ReportResult, PgConfig,
 } from './lib/types'
 
 // Node registry — imports all nodes (registers them), exports NODE_TYPES
-import { NODE_TYPES } from './nodes'
+import { NODE_TYPES, getNodeDef } from './nodes'
+import { delimiterChar } from './nodes/CSVOutputNode'
 
 import Sidebar         from './components/Sidebar'
 import PreviewDrawer   from './components/PreviewDrawer'
@@ -70,7 +71,9 @@ function fallbackPosition() {
 
 // ── Upstream edge distance BFS ────────────────────────────────────────────────
 // Returns a map of edgeId → depth (0 = direct input to nodeId, 1 = one step up, …)
+// Walks data-carrying edges only — sequence/token wires don't feed the preview.
 function getUpstreamEdgeDistances(nodeId: string, edges: AppEdge[]): Map<string, number> {
+  const dataEdges = edges.filter((e) => isRowStreamEdge(e) || e.sourceHandle?.startsWith('col-') || e.sourceHandle === 'conn-out')
   const edgeDist = new Map<string, number>()
   const visitedNodes = new Set<string>([nodeId])
   let frontier = [nodeId]
@@ -78,7 +81,7 @@ function getUpstreamEdgeDistances(nodeId: string, edges: AppEdge[]): Map<string,
   while (frontier.length > 0) {
     const next: string[] = []
     for (const tid of frontier) {
-      for (const e of edges) {
+      for (const e of dataEdges) {
         if (e.target === tid && !edgeDist.has(e.id)) {
           edgeDist.set(e.id, depth)
           if (!visitedNodes.has(e.source)) {
@@ -95,40 +98,80 @@ function getUpstreamEdgeDistances(nodeId: string, edges: AppEdge[]): Map<string,
 }
 
 // ── Node label for preview modal title ────────────────────────────────────────
+// Value-bearing nodes show their configured value; everything else falls back
+// to the registry display name (was a hand-maintained switch that drifted).
 function nodeLabel(node: AppNode | undefined): string {
   if (!node) return ''
-  if (node.type === 'csv-input')   return (node.data as CSVNodeData).fileName || 'CSV'
-  if (node.type === 'json-input')   return (node.data as JSONNodeData).fileName || 'JSON'
-  if (node.type === 'unnest')       return 'Unnest'
-  if (node.type === 'join')        return 'Join'
-  if (node.type === 'transform')   return 'Transform'
-  if (node.type === 'destination') return 'Destination'
-  if (node.type === 'csv-output')  return 'CSV Export'
-  if (node.type === 'merge')           return 'Merge'
-  if (node.type === 'concat')          return 'Concat'
-  if (node.type === 'filter')          return 'Filter'
-  if (node.type === 'static-value')        return 'Static Value'
-  if (node.type === 'increment-value')     return 'Increment'
-  if (node.type === 'unique')              return 'Unique'
-  if (node.type === 'map-value')           return (node.data as MapValueData).columnName || 'Map'
-  if (node.type === 'conditional-output')  return (node.data as ConditionalOutputData).columnName || 'Conditional'
-  if (node.type === 'sort')               return 'Sort'
-  if (node.type === 'limit')              return `Limit ${(node.data as LimitNodeData).count}`
-  if (node.type === 'aggregate')          return 'Aggregate'
-  if (node.type === 'report')             return 'Report'
-  if (node.type === 'connection')         return `DB: ${(node.data as ConnectionNodeData).config?.host || 'Connection'}`
-  if (node.type === 'read-table')         return (node.data as ReadTableNodeData).tableName || 'Read Table'
-  if (node.type === 'read-table-cached')  return (node.data as ReadTableCachedNodeData).tableName || 'Read (Cached)'
-  if (node.type === 'write-table')        return (node.data as WriteTableNodeData).tableName || 'Write Table'
-  if (node.type === 'browse-schema') {
-    const d = node.data as BrowseSchemaNodeData
-    return d.selectedTable ? `${d.selectedSchema}.${d.selectedTable}` : 'Browse Schema'
+  const registryName = getNodeDef(node.type ?? '')?.name ?? ''
+  const userLabel = (node.data as { nodeLabel?: string } | undefined)?.nodeLabel
+  if (userLabel) return userLabel
+  switch (node.type) {
+    case 'csv-input':
+    case 'json-input':
+      return (node.data as { fileName?: string }).fileName || registryName
+    case 'map-value':           return (node.data as MapValueData).columnName || registryName
+    case 'conditional-output':  return (node.data as ConditionalOutputData).columnName || registryName
+    case 'limit':               return `Limit ${(node.data as LimitNodeData).count}`
+    case 'connection':          return `DB: ${(node.data as ConnectionNodeData).config?.host || 'Connection'}`
+    case 'read-table':          return (node.data as ReadTableNodeData).tableName || registryName
+    case 'read-table-cached':   return (node.data as ReadTableCachedNodeData).tableName || registryName
+    case 'write-table':         return (node.data as WriteTableNodeData).tableName || registryName
+    case 'update-db-row':       return (node.data as UpdateDbRowNodeData).tableName || registryName
+    case 'raw-query':           return registryName
+    case 'browse-schema': {
+      const d = node.data as BrowseSchemaNodeData
+      return d.selectedTable ? `${d.selectedSchema}.${d.selectedTable}` : registryName
+    }
+    default:
+      return registryName
   }
-  return ''
 }
 
-function quoteIdent(v: string): string {
-  return `"${v.replace(/"/g, '""')}"`
+// ── Saved-file credential handling ────────────────────────────────────────────
+// Connection passwords are encrypted with Electron safeStorage before hitting
+// disk, and the derived `resolvedConfig` copies (which embed the plaintext
+// password) are stripped — propagateColumns rebuilds them on load.
+
+async function sanitizeNodesForSave(nodes: AppNode[]): Promise<AppNode[]> {
+  const out: AppNode[] = []
+  for (const n of nodes) {
+    const data = { ...(n.data as Record<string, unknown>) }
+    if ('resolvedConfig' in data) delete data.resolvedConfig
+    if (n.type === 'connection' && data.config) {
+      const cfg = { ...(data.config as PgConfig) }
+      if (cfg.password) {
+        const enc = await window.api.secureEncrypt(cfg.password)
+        if (enc) {
+          data.passwordEnc = enc
+          cfg.password = ''
+        }
+        // enc === null → safeStorage unavailable; fall back to legacy plaintext
+      }
+      data.config = cfg
+    }
+    out.push({ ...n, data } as AppNode)
+  }
+  return out
+}
+
+async function restoreNodeSecrets(nodes: AppNode[]): Promise<AppNode[]> {
+  const out: AppNode[] = []
+  for (const n of nodes) {
+    if (n.type === 'connection') {
+      const data = n.data as Record<string, unknown>
+      const enc = data.passwordEnc as string | undefined
+      const cfg = data.config as PgConfig | undefined
+      if (enc && cfg && !cfg.password) {
+        const plain = await window.api.secureDecrypt(enc)
+        if (plain != null) {
+          out.push({ ...n, data: { ...data, config: { ...cfg, password: plain } } } as AppNode)
+          continue
+        }
+      }
+    }
+    out.push(n)
+  }
+  return out
 }
 
 // ── Pipeline execution phase ──────────────────────────────────────────────────
@@ -168,15 +211,20 @@ export default function App() {
   const [nodeExecState, setNodeExecState] = useState<Record<string, ExecPhase>>({})
   const [isExecuting, setIsExecuting] = useState(false)
   const isExecutingRef = useRef(false)
+  // Stop request — checked between plan actions; the in-flight action finishes,
+  // everything after it is skipped (main-process IPC calls aren't abortable).
+  const stopRequestedRef = useRef(false)
 
   // Full execution mode — re-materializes Parquet nodes and re-fetches cached DB nodes before running
   const [fullExecution, setFullExecution] = useState(false)
   const fullExecutionRef = useRef(fullExecution)
   fullExecutionRef.current = fullExecution
 
-  // Queued downstream cascade — set by node components after a manual refresh,
-  // processed in a useEffect so React state is committed before sink SQL is built
-  const [pendingCascadeFrom, setPendingCascadeFrom] = useState<string | null>(null)
+  // Queued downstream cascades — node ids whose refresh wants to re-run its
+  // downstream subgraph. Processed in a useEffect once no run is active, so
+  // refreshes during a run queue up instead of being dropped, and multiple
+  // quick refreshes merge into a single execution.
+  const [pendingCascade, setPendingCascade] = useState<Set<string>>(new Set())
 
   // Tab management
   const [tabs, setTabs] = useState<PipelineTab[]>([
@@ -329,13 +377,7 @@ export default function App() {
   )
 
   const onEdgesChange: OnEdgesChange<AppEdge> = useCallback(
-    (changes) => {
-      setEdges((es) => {
-        const next = applyEdgeChanges(changes, es) as AppEdge[]
-        setNodes((ns) => propagateColumns(ns as AppNode[], next))
-        return next
-      })
-    },
+    (changes) => setEdges((es) => applyEdgeChanges(changes, es) as AppEdge[]),
     []
   )
 
@@ -348,11 +390,17 @@ export default function App() {
       const filtered = shouldReplace
         ? es.filter((e) => !(e.target === connection.target && e.targetHandle === connection.targetHandle))
         : es
-      const next = addEdge({ ...connection, className: cls, animated: false }, filtered) as AppEdge[]
-      setNodes((ns) => propagateColumns(ns as AppNode[], next))
-      return next
+      return addEdge({ ...connection, className: cls, animated: false }, filtered) as AppEdge[]
     })
   }, [])
+
+  // Re-derive node columns whenever the wiring changes. Doing this in an effect
+  // (instead of inside the setEdges updater) keeps the state updaters pure —
+  // React 18 StrictMode double-invokes updaters and flags side effects in them.
+  // It also covers project load: setting edges propagates columns/configs once.
+  useEffect(() => {
+    setNodes((ns) => propagateColumns(ns as AppNode[], edges))
+  }, [edges])
 
   const isValidConnection = useCallback<IsValidConnection<AppEdge>>((connection) => {
     if (connection.source === connection.target) return false
@@ -393,9 +441,7 @@ export default function App() {
     if (!d.resolvedConfig) return false
 
     const query = d.readMode === 'table'
-      ? (d.tableName
-          ? `SELECT * FROM ${d.dbSelectedSchema ? `${quoteIdent(d.dbSelectedSchema)}.` : ''}${quoteIdent(d.tableName)}`
-          : '')
+      ? (d.tableName ? buildPgTableQuery(d.dbSelectedSchema, d.tableName) : '')
       : d.customSQL
     if (!query.trim()) return false
 
@@ -499,7 +545,6 @@ export default function App() {
       setPreviewError('No complete pipeline yet — connect all required inputs.')
       return
     }
-    console.log('[preview SQL]', sql)
     setPreviewLoading(true)
     window.api.dbPreview(sql)
       .then((result) => {
@@ -534,219 +579,25 @@ export default function App() {
   // (also handles new node types)
 
   // ── Sidebar add dispatcher ─────────────────────────────────────────────────
+  // Registry-driven: every registered node spawns from its def's defaultData().
+  // (The old hand-written switch silently ignored node types it didn't know.)
   const handleSidebarAdd = useCallback(async (type: string) => {
-    switch (type) {
-      case 'csv-input': {
-        const result = await window.api.selectCSV()
-        if (!result) return
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'csv-input', position: spawnPosition(),
-          data: { fileName: result.fileName, filePath: result.filePath, columns: result.columns } satisfies CSVNodeData,
-        }])
-        break
-      }
-      case 'json-input': {
-        const result = await window.api.selectJSON()
-        if (!result) return
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'json-input', position: spawnPosition(),
-          data: { fileName: result.fileName, filePath: result.filePath, columns: result.columns } satisfies JSONNodeData,
-        }])
-        break
-      }
-      case 'unnest':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'unnest', position: spawnPosition(),
-          data: { arrayColumn: '', itemColumn: 'item', inputColumns: [] } satisfies UnnestNodeData,
-        }])
-        break
-      case 'json-extract':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'json-extract', position: spawnPosition(),
-          data: { sourceColumn: 'item', keepAll: true, fields: [], inputColumns: [] } satisfies JsonExtractNodeData,
-        }])
-        break
-      case 'join':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'join', position: spawnPosition(),
-          data: { joinType: 'INNER', leftKey: '', rightKey: '', leftColumns: [], rightColumns: [] } satisfies JoinNodeData,
-        }])
-        break
-      case 'transform':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'transform', position: spawnPosition(),
-          data: { expressions: [], keepAll: true, inputColumns: [] } satisfies TransformNodeData,
-        }])
-        break
-      case 'destination':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'destination', position: spawnPosition(),
-          data: { label: 'Output', inputColumns: [], colMap: [] } satisfies DestinationNodeData,
-        }])
-        break
-      case 'csv-output':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'csv-output', position: spawnPosition(),
-          data: { outputPath: '', includeHeader: true, inputColumns: [], lastExport: null, delimiter: 'comma' } satisfies CSVOutputNodeData,
-        }])
-        break
-      case 'merge':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'merge', position: spawnPosition(),
-          data: { inputColumns: [] } satisfies MergeNodeData,
-        }])
-        break
-      case 'concat':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'concat', position: spawnPosition(),
-          data: { inputColumns: [] } satisfies ConcatNodeData,
-        }])
-        break
-      case 'filter':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'filter', position: spawnPosition(),
-          data: { condition: '', inputColumns: [] } satisfies FilterNodeData,
-        }])
-        break
-      case 'static-value':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'static-value', position: spawnPosition(),
-          data: { columnName: 'value', value: '', hasAnchor: false } satisfies StaticValueData,
-        }])
-        break
-      case 'increment-value':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'increment-value', position: spawnPosition(),
-          data: { columnName: 'index', startAt: 1, hasAnchor: false } satisfies IncrementValueData,
-        }])
-        break
-      case 'unique':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'unique', position: spawnPosition(),
-          data: { keyColumn: '', keep: 'first', inputColumns: [] } satisfies UniqueNodeData,
-        }])
-        break
-      case 'map-value':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'map-value', position: spawnPosition(),
-          data: { columnName: 'mapped', sourceColumn: '', mappings: [], hasAnchor: false } satisfies MapValueData,
-        }])
-        break
-      case 'conditional-output':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'conditional-output', position: spawnPosition(),
-          data: { columnName: 'result', conditions: [], fallback: '', hasAnchor: false } satisfies ConditionalOutputData,
-        }])
-        break
-      case 'sort':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'sort', position: spawnPosition(),
-          data: { sortKeys: [], inputColumns: [] } satisfies SortNodeData,
-        }])
-        break
-      case 'limit':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'limit', position: spawnPosition(),
-          data: { count: 100, offset: 0 } satisfies LimitNodeData,
-        }])
-        break
-      case 'aggregate':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'aggregate', position: spawnPosition(),
-          data: { groupBy: [], aggregations: [], inputColumns: [] } satisfies AggregateNodeData,
-        }])
-        break
-      case 'report':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'report', position: spawnPosition(),
-          data: { inputColumns: [], result: null, status: 'idle' } satisfies ReportNodeData,
-        }])
-        break
-      case 'materialize':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'materialize', position: spawnPosition(),
-          data: { parquetPath: null, columns: [], status: 'idle', rowCount: null } satisfies MaterializeNodeData,
-        }])
-        break
-      case 'connection':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'connection', position: spawnPosition(),
-          data: { config: { host: 'localhost', port: 5432, database: '', user: '', password: '', ssl: false }, testStatus: 'idle' } satisfies ConnectionNodeData,
-        }])
-        break
-      case 'read-table':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'read-table', position: spawnPosition(),
-          data: { readMode: 'table', tableName: '', customSQL: '', csvPath: null, columns: [], rowCount: null, status: 'idle', resolvedConfig: null } satisfies ReadTableNodeData,
-        }])
-        break
-      case 'read-table-cached':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'read-table-cached', position: spawnPosition(),
-          data: {
-            readMode: 'table', tableName: '', customSQL: '',
-            csvPath: null, columns: [], rowCount: null,
-            status: 'idle', resolvedConfig: null, cacheDate: null,
-            dbTables: [], dbSelectedSchema: null, dbSelectedTable: null, dbStatus: 'idle', dbError: undefined,
-          } satisfies ReadTableCachedNodeData,
-        }])
-        break
-      case 'write-table':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'write-table', position: spawnPosition(),
-          data: { tableName: '', writeMode: 'append', status: 'idle', rowCount: null, inputColumns: [], resolvedConfig: null } satisfies WriteTableNodeData,
-        }])
-        break
-      case 'browse-schema':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'browse-schema', position: spawnPosition(),
-          data: { tables: [], selectedSchema: null, selectedTable: null, filter: '', csvPath: null, columns: [], rowCount: null, status: 'idle', resolvedConfig: null } satisfies BrowseSchemaNodeData,
-        }])
-        break
-      case 'api-get':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'api-get', position: spawnPosition(),
-          data: { method: 'GET', url: '', headers: [], jsonPath: null, columns: [], rowCount: null, status: 'idle' } satisfies ApiGetNodeData,
-        }])
-        break
-      case 'api-delete':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'api-delete', position: spawnPosition(),
-          data: { method: 'DELETE', url: '', headers: [], jsonPath: null, columns: [], rowCount: null, status: 'idle' } satisfies ApiGetNodeData,
-        }])
-        break
-      case 'api-post':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'api-post', position: spawnPosition(),
-          data: { method: 'POST', url: '', headers: [], bodyMode: 'static', staticBody: '', jsonPath: null, columns: [], rowCount: null, status: 'idle', inputColumns: [] } satisfies ApiBodyNodeData,
-        }])
-        break
-      case 'api-put':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'api-put', position: spawnPosition(),
-          data: { method: 'PUT', url: '', headers: [], bodyMode: 'static', staticBody: '', jsonPath: null, columns: [], rowCount: null, status: 'idle', inputColumns: [] } satisfies ApiBodyNodeData,
-        }])
-        break
-      case 'api-patch':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'api-patch', position: spawnPosition(),
-          data: { method: 'PATCH', url: '', headers: [], bodyMode: 'static', staticBody: '', jsonPath: null, columns: [], rowCount: null, status: 'idle', inputColumns: [] } satisfies ApiBodyNodeData,
-        }])
-        break
-      case 'api-auth':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'api-auth', position: spawnPosition(),
-          data: { method: 'POST', url: '', headers: [], body: '', tokenPath: '$.access_token', headerName: 'Authorization', headerTemplate: 'Bearer {{token}}', status: 'idle' } satisfies ApiAuthNodeData,
-        }])
-        break
-      case 'api-paginated':
-        setNodes((ns) => [...ns, {
-          id: uuid(), type: 'api-paginated', position: spawnPosition(),
-          data: { url: '', headers: [], strategy: 'page', pageParam: 'page', pageStart: 1, offsetParam: 'offset', limitParam: 'limit', limitValue: 100, cursorPath: '', cursorParam: 'cursor', cursorIn: 'query', dataPath: '', maxPages: 100, failOnError: false, jsonPath: null, columns: [], rowCount: null, status: 'idle' } satisfies ApiPaginatedNodeData,
-        }])
-        break
+    // File inputs open a picker before the node exists
+    if (type === 'csv-input' || type === 'json-input') {
+      const result = type === 'csv-input' ? await window.api.selectCSV() : await window.api.selectJSON()
+      if (!result) return
+      setNodes((ns) => [...ns, {
+        id: uuid(), type, position: spawnPosition(),
+        data: { fileName: result.fileName, filePath: result.filePath, columns: result.columns },
+      } as AppNode])
+      return
     }
-  }, [])
+    const def = getNodeDef(type)
+    if (!def) return
+    setNodes((ns) => [...ns, {
+      id: uuid(), type, position: spawnPosition(), data: def.defaultData(),
+    } as AppNode])
+  }, [spawnPosition])
 
   // ── Save project ──────────────────────────────────────────────────────────
   const saveProject = useCallback(async (forceDialog = false) => {
@@ -754,7 +605,7 @@ export default function App() {
     const replacer = (_: string, v: any) => (typeof v === 'bigint' ? Number(v) : v)
     const payload = JSON.stringify({
       version: 1,
-      nodes: nodesRef.current,
+      nodes: await sanitizeNodesForSave(nodesRef.current),
       edges: edgesRef.current,
       nodeUserColors: nodeUserColorsRef.current,
     }, replacer, 2)
@@ -788,7 +639,9 @@ export default function App() {
       }
       if (!parsed.nodes || !parsed.edges) throw new Error('Invalid file format')
       nodeCounter = parsed.nodes.length
-      setNodes(parsed.nodes)
+      // Decrypt connection passwords; the edges effect re-runs propagateColumns
+      // which rebuilds the stripped resolvedConfig copies.
+      setNodes(await restoreNodeSecrets(parsed.nodes))
       setEdges(parsed.edges)
       setNodeUserColors(parsed.nodeUserColors ?? {})
       setCurrentFilePath(loaded.path)
@@ -817,7 +670,7 @@ export default function App() {
         }
         if (!parsed.nodes || !parsed.edges) return
         nodeCounter = parsed.nodes.length
-        setNodes(parsed.nodes)
+        setNodes(await restoreNodeSecrets(parsed.nodes))
         setEdges(parsed.edges)
         setNodeUserColors(parsed.nodeUserColors ?? {})
         setCurrentFilePath(loaded.path)
@@ -861,257 +714,253 @@ export default function App() {
     })
   }, [nodes, nodeExecState])
 
-  // ── Execute pipeline — runs all write-table / csv-output sinks in order ───────
-  const executePipeline = useCallback(async (opts?: { targetSinkIds?: Set<string> }) => {
+  // ── Execute pipeline ──────────────────────────────────────────────────────
+  // The plan (lib/execution.ts) decides what runs and in what order: sinks,
+  // cache refreshes (Full Run / cascade), and seq-wired work nodes — ordered
+  // by a real topological sort over data + sequence edges, so diverging and
+  // re-merging branches execute correctly.
+  const executePipeline = useCallback(async (opts?: { cascadeFrom?: Set<string>; targetSinkIds?: Set<string> }) => {
     if (isExecutingRef.current) return
     isExecutingRef.current = true
+    stopRequestedRef.current = false
 
-    const isSink = (n: AppNode) =>
-      (n.type === 'write-table' && !!(n.data as WriteTableNodeData).resolvedConfig && !!(n.data as WriteTableNodeData).tableName) ||
-      n.type === 'csv-output'
-
-    const sinkNodes = nodesRef.current.filter((n) =>
-      isSink(n) && (!opts?.targetSinkIds || opts.targetSinkIds.has(n.id))
-    )
-    if (!sinkNodes.length) {
-      if (!opts?.targetSinkIds) showToast('No output nodes — add a Write Table or CSV Export node')
+    const plan = planExecution(nodesRef.current, edgesRef.current, {
+      fullRefresh: fullExecutionRef.current && !opts?.cascadeFrom,
+      cascadeFrom: opts?.cascadeFrom,
+      targetSinkIds: opts?.targetSinkIds,
+    })
+    if (!plan.length) {
+      if (!opts?.cascadeFrom && !opts?.targetSinkIds) {
+        showToast('No output nodes — add a Write Table or CSV Export node')
+      }
       isExecutingRef.current = false
       return
     }
 
     setIsExecuting(true)
 
-    // ── Build the full execution DAG ──────────────────────────────────────────
-    // Collect every node that feeds into any sink (via row-stream edges).
-    // These are the nodes that will visually participate in the run.
-    const execNodeIds = new Set<string>()
-    for (const sink of sinkNodes) {
-      execNodeIds.add(sink.id)
-      for (const id of getUpstreamNodeIds(sink.id, edgesRef.current)) {
-        execNodeIds.add(id)
-      }
-    }
-
     // Pulse every node in the execution path; dim everything outside it
+    const execNodeIds = new Set(plan.map((a) => a.nodeId))
+    for (const a of plan) {
+      for (const id of getUpstreamNodeIds(a.nodeId, edgesRef.current)) execNodeIds.add(id)
+    }
     const initState: Record<string, ExecPhase> = {}
     nodesRef.current.forEach((n) => {
       initState[n.id] = execNodeIds.has(n.id) ? 'running' : 'idle'
     })
     setNodeExecState(initState)
 
-    // ── Full execution pre-pass: re-materialize + re-fetch cached nodes ───────
-    // Only runs when fullExecution is on AND this is a top-level run (not cascade).
-    if (fullExecutionRef.current && !opts?.targetSinkIds) {
-      const refreshIds = [...execNodeIds].filter((id) => {
-        const n = nodesRef.current.find((n) => n.id === id)
-        return n?.type === 'materialize' || n?.type === 'read-table-cached'
-      })
-
-      if (refreshIds.length) {
-        showToast(`↻ Full Run — refreshing ${refreshIds.length} cached node${refreshIds.length > 1 ? 's' : ''}…`)
-
-        // Sort upstream-first so cascading materializes get fresh inputs
-        const sortedRefreshIds = [...refreshIds].sort((a, b) => {
-          const upA = getUpstreamNodeIds(a, edgesRef.current)
-          if (upA.has(b)) return 1
-          const upB = getUpstreamNodeIds(b, edgesRef.current)
-          if (upB.has(a)) return -1
-          return 0
-        })
-
-        for (const nodeId of sortedRefreshIds) {
-          const node = nodesRef.current.find((n) => n.id === nodeId)
-          if (!node) continue
-
-          if (node.type === 'materialize') {
-            const d = node.data as MaterializeNodeData
-            const inputEdge = edgesRef.current.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
-            if (!inputEdge) continue
-            const sql = buildNodeSQL(inputEdge.source, nodesRef.current, edgesRef.current, inputEdge.sourceHandle ?? undefined)
-            if (!sql) continue
-            try {
-              const result = await window.api.materializeRun(sql, d.parquetPath ?? undefined)
-              const preview = await window.api.dbPreview(`SELECT COUNT(*) AS __cnt FROM read_parquet('${result.parquetPath.replace(/'/g, "''")}')`)
-              const cnt = preview.rows[0]?.[0]
-              const updatedData: MaterializeNodeData = {
-                ...d, parquetPath: result.parquetPath, columns: result.columns,
-                status: 'done', rowCount: cnt != null ? Number(cnt) : null, error: undefined,
-              }
-              const updatedNodes = propagateColumns(
-                nodesRef.current.map((n) => n.id === nodeId ? { ...n, data: updatedData } : n) as AppNode[],
-                edgesRef.current
-              )
-              nodesRef.current = updatedNodes
-              setNodes(updatedNodes)
-            } catch (err) {
-              setNodeExecState((s) => ({ ...s, [nodeId]: 'error' }))
-              showToast(`✗ Re-materialize failed: ${err instanceof Error ? err.message : String(err)}`)
-            }
-
-          } else if (node.type === 'read-table-cached') {
-            const d = node.data as ReadTableCachedNodeData
-            if (!d.resolvedConfig) continue
-            const tableQuery = d.tableName
-              ? `SELECT * FROM ${d.dbSelectedSchema ? `${quoteIdent(d.dbSelectedSchema)}.` : ''}${quoteIdent(d.tableName)}`
-              : ''
-            const query = (d.readMode === 'table' ? tableQuery : d.customSQL) || ''
-            if (!query) continue
-            try {
-              //@ts-ignore
-              const result = await window.api.pgFetchCached(d.resolvedConfig, query, true)
-              const updatedData: ReadTableCachedNodeData = {
-                ...d, csvPath: result.csvPath, columns: result.columns,
-                rowCount: result.rowCount, status: 'ready',
-                cacheDate: result.cacheDate ?? new Date().toISOString(), error: undefined,
-              }
-              const updatedNodes = propagateColumns(
-                nodesRef.current.map((n) => n.id === nodeId ? { ...n, data: updatedData } : n) as AppNode[],
-                edgesRef.current
-              )
-              nodesRef.current = updatedNodes
-              setNodes(updatedNodes)
-            } catch (err) {
-              setNodeExecState((s) => ({ ...s, [nodeId]: 'error' }))
-              showToast(`✗ Re-fetch failed (${(d.tableName || 'cache')}): ${err instanceof Error ? err.message : String(err)}`)
-            }
-          }
-        }
-      }
+    const refreshCount = plan.filter((a) => a.kind === 'materialize' || a.kind === 'refresh-cache').length
+    if (refreshCount > 0 && fullExecutionRef.current && !opts?.cascadeFrom) {
+      showToast(`↻ Full Run — refreshing ${refreshCount} cached node${refreshCount > 1 ? 's' : ''}…`)
     }
 
-    // ── Order sinks by sequence edges (topological sort) ─────────────────────
-    // seq-out → seq-in edges mean "this node must complete before the target".
-    // Build a dependency map among sink nodes and sort them accordingly.
-    const seqEdges = edgesRef.current.filter(
-      (e) => e.sourceHandle === 'seq-out' && e.targetHandle === 'seq-in'
-    )
-    const seqPredMap = new Map<string, string[]>()
-    for (const e of seqEdges) {
-      if (!seqPredMap.has(e.target)) seqPredMap.set(e.target, [])
-      seqPredMap.get(e.target)!.push(e.source)
-    }
-    const sinkIdSet = new Set(sinkNodes.map((s) => s.id))
-
-    function getSinkPredecessors(nodeId: string, visited = new Set<string>()): Set<string> {
-      const result = new Set<string>()
-      if (visited.has(nodeId)) return result
-      visited.add(nodeId)
-      for (const pred of seqPredMap.get(nodeId) ?? []) {
-        if (sinkIdSet.has(pred)) result.add(pred)
-        for (const t of getSinkPredecessors(pred, visited)) result.add(t)
-      }
-      return result
+    // Apply a node-data patch, keep nodesRef current, and re-propagate columns
+    // so later actions in this run build SQL against fresh paths/schemas.
+    const applyNodePatch = (nodeId: string, patch: Record<string, unknown>) => {
+      const updated = propagateColumns(
+        nodesRef.current.map((n) => n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n) as AppNode[],
+        edgesRef.current
+      )
+      nodesRef.current = updated
+      setNodes(updated)
     }
 
-    const deps = new Map(sinkNodes.map((s) => [s.id, getSinkPredecessors(s.id)]))
-    const inDeg = new Map(sinkNodes.map((s) => [s.id, deps.get(s.id)!.size]))
-    const ready = sinkNodes.filter((s) => inDeg.get(s.id)! === 0)
-    const orderedSinks: AppNode[] = []
-    while (ready.length > 0) {
-      const node = ready.shift()!
-      orderedSinks.push(node)
-      for (const other of sinkNodes) {
-        if (deps.get(other.id)?.has(node.id)) {
-          deps.get(other.id)!.delete(node.id)
-          const d = inDeg.get(other.id)! - 1
-          inDeg.set(other.id, d)
-          if (d === 0) ready.push(other)
-        }
-      }
-    }
-    // Append any sinks not reached (e.g. in a cycle) so they still run
-    for (const s of sinkNodes) {
-      if (!orderedSinks.includes(s)) orderedSinks.push(s)
-    }
-
-    // ── Execute each sink sequentially ────────────────────────────────────────
-    for (const sink of orderedSinks) {
-      // All nodes whose results feed into this specific sink
-      const sinkPath = new Set([sink.id, ...getUpstreamNodeIds(sink.id, edgesRef.current)])
+    let stopped = false
+    for (const action of plan) {
+      if (stopRequestedRef.current) { stopped = true; break }
+      const node = nodesRef.current.find((n) => n.id === action.nodeId)
+      if (!node) continue
+      let skipped = false
 
       try {
-        if (sink.type === 'write-table') {
-          const d = sink.data as WriteTableNodeData
-          const inputEdge = edgesRef.current.find((e) => e.target === sink.id && e.targetHandle === 'row-in')
-          if (!inputEdge) throw new Error('No data input connected to Write Table')
-          const sql = buildNodeSQL(inputEdge.source, nodesRef.current, edgesRef.current, inputEdge.sourceHandle ?? undefined)
-          if (!sql) throw new Error('Could not build upstream SQL for Write Table')
-          const qualifiedTable = d.dbSelectedSchema ? `${d.dbSelectedSchema}.${d.tableName}` : d.tableName
-          setNodes((ns) => ns.map((n) => n.id === sink.id
-            ? { ...n, data: { ...n.data, status: 'writing', writeProgress: null, error: undefined, rowCount: null } }
-            : n
-          ))
-          window.api.onPgWriteProgress((written, total) => {
-            setNodes((ns) => ns.map((n) => n.id === sink.id
-              ? { ...n, data: { ...n.data, writeProgress: { written, total } } }
-              : n
-            ))
-          })
-          let writeResult: { rowCount: number }
-          try {
-            writeResult = await window.api.pgWrite(d.resolvedConfig!, sql, qualifiedTable, d.writeMode)
-          } finally {
-            window.api.offPgWriteProgress()
+        switch (action.kind) {
+          case 'materialize': {
+            const d = node.data as MaterializeNodeData
+            const inputEdge = edgesRef.current.find((e) => e.target === node.id && e.targetHandle === 'row-in')
+            if (!inputEdge) { skipped = true; break }
+            const sql = buildNodeSQL(inputEdge.source, nodesRef.current, edgesRef.current, inputEdge.sourceHandle ?? undefined)
+            if (!sql) { skipped = true; break }
+            const result = await window.api.materializeRun(sql, d.parquetPath ?? undefined)
+            const preview = await window.api.dbPreview(`SELECT COUNT(*) AS __cnt FROM read_parquet('${result.parquetPath.replace(/'/g, "''")}')`)
+            const cnt = preview.rows[0]?.[0]
+            applyNodePatch(node.id, {
+              parquetPath: result.parquetPath, columns: result.columns,
+              status: 'done', rowCount: cnt != null ? Number(cnt) : null, error: undefined,
+            })
+            break
           }
-          setNodes((ns) => ns.map((n) => n.id === sink.id
-            ? { ...n, data: { ...n.data, status: 'done', rowCount: writeResult.rowCount, writeProgress: null } }
-            : n
-          ))
-          showToast(`✓ Wrote ${writeResult.rowCount.toLocaleString()} rows → ${qualifiedTable}`)
-        } else if (sink.type === 'csv-output') {
-          const d = sink.data as CSVOutputNodeData
-          const sql = buildNodeSQL(sink.id, nodesRef.current, edgesRef.current)
-          if (!sql) throw new Error('Could not build SQL for CSV Export')
-          const hasKnownPath = Boolean(d.outputPath && d.outputPath.trim())
-          const delimChar = d.delimiter === 'semicolon' ? ';'
-            : d.delimiter === 'pipe' ? '|'
-            : d.delimiter === 'tab' ? '\t'
-            : ','
-          const result = await window.api.exportCSV(
-            sql,
-            delimChar,
-            d.includeHeader,
-            hasKnownPath ? d.outputPath : undefined,
-            hasKnownPath
-          )
-          if (!result) {
-            // User cancelled the save dialog — pull this sink out of the run
-            setNodeExecState((s) => ({ ...s, [sink.id]: 'idle' }))
-            continue
+
+          case 'refresh-cache': {
+            const d = node.data as ReadTableCachedNodeData
+            if (!d.resolvedConfig) { skipped = true; break }
+            const query = (d.readMode === 'table'
+              ? (d.tableName ? buildPgTableQuery(d.dbSelectedSchema, d.tableName) : '')
+              : d.customSQL) || ''
+            if (!query.trim()) { skipped = true; break }
+            const result = await window.api.pgFetchCached(d.resolvedConfig, query, true)
+            applyNodePatch(node.id, {
+              csvPath: result.csvPath, columns: result.columns, rowCount: result.rowCount,
+              status: 'ready', cacheDate: result.cacheDate ?? new Date().toISOString(), error: undefined,
+            })
+            break
           }
-          setNodes((ns) => ns.map((n) =>
-            n.id === sink.id
-              ? {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    outputPath: result.filePath,
-                    lastExport: { rowCount: result.rowCount, timestamp: new Date().toLocaleTimeString() },
-                  },
-                }
-              : n
-          ))
-          showToast(`✓ Exported ${result.rowCount?.toLocaleString() ?? '?'} rows`)
+
+          case 'api-fetch': {
+            applyNodePatch(node.id, { status: 'fetching', error: undefined })
+            const patch = await executeApiNode(node, nodesRef.current, edgesRef.current)
+            applyNodePatch(node.id, patch)
+            break
+          }
+
+          case 'write-table': {
+            const d = node.data as WriteTableNodeData
+            const inputEdge = edgesRef.current.find((e) => e.target === node.id && e.targetHandle === 'row-in')
+            if (!inputEdge) throw new Error('No data input connected to Write Table')
+            const sql = buildNodeSQL(inputEdge.source, nodesRef.current, edgesRef.current, inputEdge.sourceHandle ?? undefined)
+            if (!sql) throw new Error('Could not build upstream SQL for Write Table')
+            applyNodePatch(node.id, { status: 'writing', writeProgress: null, error: undefined, rowCount: null })
+            window.api.onPgWriteProgress((written, total) => {
+              setNodes((ns) => ns.map((n) => n.id === node.id
+                ? { ...n, data: { ...n.data, writeProgress: { written, total } } }
+                : n
+              ) as AppNode[])
+            })
+            let writeResult: { rowCount: number }
+            try {
+              writeResult = await window.api.pgWrite(
+                d.resolvedConfig!, sql,
+                { schema: d.dbSelectedSchema ?? null, table: d.tableName },
+                d.writeMode
+              )
+            } finally {
+              window.api.offPgWriteProgress()
+            }
+            applyNodePatch(node.id, { status: 'done', rowCount: writeResult.rowCount, writeProgress: null })
+            const label = d.dbSelectedSchema ? `${d.dbSelectedSchema}.${d.tableName}` : d.tableName
+            showToast(`✓ Wrote ${writeResult.rowCount.toLocaleString()} rows → ${label}`)
+            break
+          }
+
+          case 'update-rows': {
+            const d = node.data as UpdateDbRowNodeData
+            const inputEdge = edgesRef.current.find((e) => e.target === node.id && e.targetHandle === 'row-in')
+            if (!inputEdge) throw new Error('No data input connected to Update DB Row')
+            const sql = buildNodeSQL(inputEdge.source, nodesRef.current, edgesRef.current, inputEdge.sourceHandle ?? undefined)
+            if (!sql) throw new Error('Could not build upstream SQL for Update DB Row')
+            applyNodePatch(node.id, { status: 'updating', updateProgress: null, error: undefined, rowCount: null })
+            window.api.onPgUpdateProgress((written, total) => {
+              setNodes((ns) => ns.map((n) => n.id === node.id
+                ? { ...n, data: { ...n.data, updateProgress: { written, total } } }
+                : n
+              ) as AppNode[])
+            })
+            let updateResult: { rowCount: number }
+            try {
+              updateResult = await window.api.pgUpdateRows(
+                d.resolvedConfig!, sql,
+                { schema: d.dbSelectedSchema ?? null, table: d.tableName },
+                d.pkColumn,
+                d.updateColumns
+              )
+            } finally {
+              window.api.offPgUpdateProgress()
+            }
+            applyNodePatch(node.id, { status: 'done', rowCount: updateResult.rowCount, updateProgress: null })
+            const label = d.dbSelectedSchema ? `${d.dbSelectedSchema}.${d.tableName}` : d.tableName
+            showToast(`✓ Updated ${updateResult.rowCount.toLocaleString()} rows in ${label}`)
+            break
+          }
+
+          case 'raw-query': {
+            const d = node.data as RawQueryNodeData
+            applyNodePatch(node.id, { status: 'running', error: undefined, rowCount: null })
+            const result = await window.api.pgExecQuery(d.resolvedConfig!, d.sql)
+            applyNodePatch(node.id, {
+              status: 'done',
+              rowCount: result.rowCount,
+            })
+            showToast(`✓ Query executed${result.rowCount != null ? ` — ${result.rowCount} row${result.rowCount === 1 ? '' : 's'} affected` : ''}`)
+            break
+          }
+
+          case 'csv-export': {
+            const d = node.data as CSVOutputNodeData
+            const sql = buildNodeSQL(node.id, nodesRef.current, edgesRef.current)
+            if (!sql) throw new Error('Could not build SQL for CSV Export')
+            const hasKnownPath = Boolean(d.outputPath && d.outputPath.trim())
+            const result = await window.api.exportCSV(
+              sql,
+              delimiterChar(d.delimiter),
+              d.includeHeader,
+              hasKnownPath ? d.outputPath : undefined,
+              hasKnownPath
+            )
+            if (!result) {
+              // User cancelled the save dialog — pull this sink out of the run
+              setNodeExecState((s) => ({ ...s, [node.id]: 'idle' }))
+              skipped = true
+              break
+            }
+            applyNodePatch(node.id, {
+              outputPath: result.filePath,
+              lastExport: { rowCount: result.rowCount, timestamp: new Date().toLocaleTimeString() },
+            })
+            showToast(`✓ Exported ${result.rowCount?.toLocaleString() ?? '?'} rows`)
+            break
+          }
         }
 
-        // Success — light the full execution path green for this sink
+        if (skipped) continue
+
+        // Success — mark the action done; sinks also light their upstream path
         setNodeExecState((s) => {
-          const next = { ...s }
-          for (const id of sinkPath) next[id] = 'done'
+          const next: Record<string, ExecPhase> = { ...s, [action.nodeId]: 'done' }
+          if (action.kind === 'write-table' || action.kind === 'csv-export' || action.kind === 'update-rows') {
+            for (const id of getUpstreamNodeIds(action.nodeId, edgesRef.current)) next[id] = 'done'
+          }
           return next
         })
       } catch (err) {
         window.api.offPgWriteProgress()
-        if (sink.type === 'write-table') {
-          setNodes((ns) => ns.map((n) => n.id === sink.id
-            ? { ...n, data: { ...n.data, status: 'error', error: String(err), writeProgress: null } }
-            : n
-          ))
+        if (isCancelledError(err)) {
+          // Stop aborted this step mid-flight (pg:write between batches,
+          // api:paginated between pages) — that's the user's doing, not a
+          // failure, so the node goes back to idle instead of error. The
+          // stop-requested check at the top of the loop ends the run.
+          if (node.type === 'write-table') {
+            applyNodePatch(node.id, { status: 'idle', error: undefined, writeProgress: null })
+          } else if (node.type === 'update-db-row') {
+            applyNodePatch(node.id, { status: 'idle', error: undefined, updateProgress: null })
+          } else if (action.kind === 'api-fetch' || node.type === 'raw-query') {
+            applyNodePatch(node.id, { status: 'idle', error: undefined })
+          }
+          setNodeExecState((s) => ({ ...s, [action.nodeId]: 'idle' }))
+          continue
         }
-        // Mark only the failed sink red; its upstream stays pulsing until cleared
-        setNodeExecState((s) => ({ ...s, [sink.id]: 'error' }))
+        if (node.type === 'write-table') {
+          applyNodePatch(node.id, { status: 'error', error: String(err), writeProgress: null })
+        } else if (node.type === 'update-db-row') {
+          applyNodePatch(node.id, { status: 'error', error: String(err), updateProgress: null })
+        } else if (node.type === 'raw-query') {
+          applyNodePatch(node.id, { status: 'error', error: String(err) })
+        } else if (action.kind === 'materialize' || action.kind === 'refresh-cache' || action.kind === 'api-fetch') {
+          applyNodePatch(node.id, { status: 'error', error: err instanceof Error ? err.message : String(err) })
+        }
+        setNodeExecState((s) => ({ ...s, [action.nodeId]: 'error' }))
         showToast(`✗ ${err instanceof Error ? err.message : String(err)}`)
       }
+    }
+
+    if (stopped) {
+      // Un-run nodes were pulsing 'running' — drop them back to idle so only
+      // the steps that actually completed keep their done/error rings.
+      setNodeExecState((s) => {
+        const next: Record<string, ExecPhase> = {}
+        for (const [id, phase] of Object.entries(s)) next[id] = phase === 'running' ? 'idle' : phase
+        return next
+      })
+      showToast('⏹ Run stopped')
     }
 
     setIsExecuting(false)
@@ -1120,36 +969,80 @@ export default function App() {
     setTimeout(() => setNodeExecState({}), 2500)
   }, [showToast])
 
-  // ── Cascade downstream sinks after a node manually refreshes ─────────────
-  // Called from node components (Materialize, ReadTableCached) via context.
-  // Uses a queued state so React commits the refreshed node data before the
-  // sink SQL is built (avoids stale parquetPath / csvPath in buildNodeSQL).
+  // ── Stop execution ─────────────────────────────────────────────────────────
+  // Halts at the next action boundary, and tells the main process to abort the
+  // in-flight cancellable operation (pg:write between batches, api:paginated
+  // between pages) — other IPC calls (materialize, csv fetch) still run to
+  // completion first. Also drops any queued cascades so they don't kick off a
+  // fresh run the moment this one stops.
+  const stopExecution = useCallback(() => {
+    if (!isExecutingRef.current) return
+    stopRequestedRef.current = true
+    setPendingCascade(new Set())
+    window.api.execCancel()
+    showToast('⏹ Stopping…')
+  }, [showToast])
+
+  // ── Reset node statuses ────────────────────────────────────────────────────
+  // Clears stuck running/error states after a failed run. Statuses reset to
+  // what the node's persisted data supports (a cached read with a cache file
+  // stays 'ready', a materialize with parquet stays 'done'). Also an escape
+  // hatch: force-clears the executing flag and asks any live run loop to die
+  // at its next action boundary, in case a run hung and left the UI locked.
+  const resetExecutionState = useCallback(() => {
+    stopRequestedRef.current = true
+    window.api.execCancel()
+    isExecutingRef.current = false
+    setIsExecuting(false)
+    setPendingCascade(new Set())
+    setNodeExecState({})
+    setNodes((ns) => ns.map((n) => {
+      const d = n.data as Record<string, unknown>
+      if (!('status' in d) && !('error' in d) && !('writeProgress' in d)) return n
+      const data: Record<string, unknown> = { ...d, error: undefined }
+      if ('writeProgress' in d) data.writeProgress = null
+      if ('status' in d) {
+        data.status =
+          n.type === 'read-table-cached' && d.csvPath ? 'ready'
+          : n.type === 'materialize' && d.parquetPath ? 'done'
+          : 'idle'
+      }
+      return { ...n, data } as AppNode
+    }) as AppNode[])
+    showToast('Node statuses reset')
+  }, [showToast])
+
+  // ── Cascade after a node manually refreshes ────────────────────────────────
+  // Node components (Materialize, Read Cached) queue a cascade via context when
+  // their "Run downstream after refresh" toggle is on. The plan re-runs any
+  // intermediate materialize/cache nodes between the source and its sinks, so
+  // cascaded writes never ship stale parquet. Queued ids wait for an active run
+  // to finish (instead of being dropped) and multiple refreshes merge into one
+  // downstream execution.
   const runDownstreamSinks = useCallback((nodeId: string) => {
-    if (!isExecutingRef.current) {
-      setPendingCascadeFrom(nodeId)
-    }
+    setPendingCascade((prev) => {
+      const next = new Set(prev)
+      next.add(nodeId)
+      return next
+    })
   }, [])
 
   useEffect(() => {
-    if (!pendingCascadeFrom) return
-    setPendingCascadeFrom(null)
-    const downstreamIds = getDownstreamNodeIds(pendingCascadeFrom, edgesRef.current)
-    const targetSinkIds = new Set(
-      nodesRef.current
-        .filter((n) => downstreamIds.has(n.id) && (
-          (n.type === 'write-table' && !!(n.data as WriteTableNodeData).resolvedConfig && !!(n.data as WriteTableNodeData).tableName) ||
-          n.type === 'csv-output'
-        ))
-        .map((n) => n.id)
-    )
-    if (targetSinkIds.size > 0) {
-      executePipeline({ targetSinkIds })
-    }
-  }, [pendingCascadeFrom, executePipeline])
+    if (!pendingCascade.size || isExecuting) return
+    const sources = pendingCascade
+    setPendingCascade(new Set())
+    executePipeline({ cascadeFrom: sources })
+  }, [pendingCascade, isExecuting, executePipeline])
+
+  // Manual single-sink run (e.g. Write Table's own button) — same engine path
+  // as Run, so progress/status handling exists in exactly one place.
+  const runSink = useCallback((nodeId: string) => {
+    executePipeline({ targetSinkIds: new Set([nodeId]) })
+  }, [executePipeline])
 
   const pipelineActionsValue = useMemo(
-    () => ({ runDownstreamSinks }),
-    [runDownstreamSinks]
+    () => ({ runDownstreamSinks, runSink }),
+    [runDownstreamSinks, runSink]
   )
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1191,6 +1084,15 @@ export default function App() {
             {currentFilePath ? 'Save' : 'Save…'}
           </button>
           <button
+            className="topbar-btn"
+            onClick={resetExecutionState}
+            disabled={nodes.length === 0}
+            title="Reset node statuses — clears stuck running/error states"
+          >
+            <RotateCcw size={12} strokeWidth={2} />
+            Reset
+          </button>
+          <button
             className={`topbar-btn${fullExecution ? ' topbar-btn-full-active' : ''}`}
             onClick={() => setFullExecution((f) => !f)}
             disabled={isExecuting}
@@ -1201,6 +1103,16 @@ export default function App() {
             <RefreshCw size={11} strokeWidth={2} />
             Full
           </button>
+          {isExecuting && (
+            <button
+              className="topbar-btn topbar-btn-stop"
+              onClick={stopExecution}
+              title="Stop the run — the current step finishes, the rest are skipped"
+            >
+              <Square size={11} strokeWidth={2} fill="currentColor" />
+              Stop
+            </button>
+          )}
           <button
             className="topbar-btn topbar-btn-run"
             onClick={() => executePipeline()}

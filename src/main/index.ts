@@ -1,14 +1,64 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
-import { join } from 'path'
+import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron'
+import { join, basename } from 'path'
 import { promises as fs, existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import * as duckdb from 'duckdb'
 import * as crypto from 'crypto'
 import * as pg from 'pg'
+import type {
+  ColumnInfo, CSVSelectResult, PreviewResult, ExportResult, ReportResult,
+  PgConfig, PgWriteTarget, ApiFetchParams, ApiFetchResult, ApiAuthParams,
+  ApiPaginatedParams, ApiPaginatedResult,
+} from '../shared/ipc'
+import { EXEC_CANCELLED } from '../shared/ipc'
 const { Pool } = pg
 
 let db: duckdb.Database
 let conn: duckdb.Connection
+
+// ── Small shared helpers ──────────────────────────────────────────────────────
+
+/** One place to build a pg Pool from a config (was copy-pasted 7×). */
+function makePool(config: PgConfig, connectionTimeoutMillis?: number): InstanceType<typeof Pool> {
+  return new Pool({
+    host: config.host, port: config.port, database: config.database,
+    user: config.user, password: config.password,
+    ssl: config.ssl ? { rejectUnauthorized: false } : false,
+    ...(connectionTimeoutMillis ? { connectionTimeoutMillis } : {}),
+  })
+}
+
+/** Quote a SQL identifier (DuckDB and Postgres share the double-quote rule). */
+function quoteIdent(v: string): string {
+  return `"${v.replace(/"/g, '""')}"`
+}
+
+/**
+ * Sniff the column schema of any DuckDB-readable source.
+ * `fromClause` is e.g. `read_csv_auto('…')` — paths must be pre-escaped.
+ */
+function sniffSchema(fromClause: string): Promise<ColumnInfo[]> {
+  return new Promise((resolve, reject) => {
+    conn.run(`CREATE OR REPLACE VIEW __schema_sniff AS SELECT * FROM ${fromClause} LIMIT 0`, (err) => {
+      if (err) return reject(new Error(err.message))
+      conn.all('DESCRIBE __schema_sniff', (descErr, rows) => {
+        if (descErr) return reject(new Error(descErr.message))
+        resolve((rows as DescribeRow[]).map((r) => ({
+          name: r.column_name,
+          type: normalizeType(r.column_type),
+        })))
+      })
+    })
+  })
+}
+
+function duckAll(sql: string): Promise<Record<string, unknown>[]> {
+  return new Promise((resolve, reject) => {
+    conn.all(sql, (err, rows) =>
+      err ? reject(new Error(err.message)) : resolve((rows ?? []) as Record<string, unknown>[])
+    )
+  })
+}
 
 function initDB(): void {
   db = new duckdb.Database(':memory:')
@@ -65,24 +115,8 @@ ipcMain.handle('csv:select', async (): Promise<CSVSelectResult | null> => {
   if (canceled || !filePaths[0]) return null
 
   const filePath = filePaths[0]
-  const safe = filePath.replace(/'/g, "''")
-
-  return new Promise((resolve, reject) => {
-    conn.run(
-      `CREATE OR REPLACE VIEW __schema_sniff AS SELECT * FROM read_csv_auto('${safe}') LIMIT 0`,
-      (err) => {
-        if (err) return reject(new Error(`Failed to read CSV: ${err.message}`))
-        conn.all('DESCRIBE __schema_sniff', (descErr, rows) => {
-          if (descErr) return reject(new Error(descErr.message))
-          const columns: ColumnInfo[] = (rows as DescribeRow[]).map((r) => ({
-            name: r.column_name,
-            type: normalizeType(r.column_type)
-          }))
-          resolve({ filePath, fileName: filePath.split('/').pop() ?? filePath, columns })
-        })
-      }
-    )
-  })
+  const columns = await sniffSchema(`read_csv_auto('${filePath.replace(/'/g, "''")}')`)
+  return { filePath, fileName: basename(filePath), columns }
 })
 
 // Select and analyze a JSON file containing an array of objects
@@ -95,58 +129,38 @@ ipcMain.handle('json:select', async (): Promise<CSVSelectResult | null> => {
   if (canceled || !filePaths[0]) return null
 
   const filePath = filePaths[0]
-  const safe = filePath.replace(/'/g, "''")
-
-  return new Promise((resolve, reject) => {
-    conn.run(
-      `CREATE OR REPLACE VIEW __json_sniff AS SELECT * FROM read_json_auto('${safe}', format='array') LIMIT 0`,
-      (err) => {
-        if (err) return reject(new Error(`Failed to read JSON: ${err.message}`))
-        conn.all('DESCRIBE __json_sniff', (descErr, rows) => {
-          if (descErr) return reject(new Error(descErr.message))
-          const columns: ColumnInfo[] = (rows as DescribeRow[]).map((r) => ({
-            name: r.column_name,
-            type: normalizeType(r.column_type)
-          }))
-          resolve({ filePath, fileName: filePath.split('\\').pop() ?? filePath, columns })
-        })
-      }
-    )
-  })
+  const columns = await sniffSchema(`read_json_auto('${filePath.replace(/'/g, "''")}', format='array')`)
+  return { filePath, fileName: basename(filePath), columns }
 })
 
 // Preview a node's SQL output (first 50 rows)
+const PREVIEW_LIMIT = 50
 ipcMain.handle('db:preview', async (_, { sql }: { sql: string }): Promise<PreviewResult> => {
-  return new Promise((resolve, reject) => {
-    conn.all(`SELECT COUNT(*) AS cnt FROM (${sql}) __preview_count`, (countErr, countRows) => {
-      if (countErr) return reject(new Error(countErr.message))
-      const totalCountRow = (countRows as { cnt: number | bigint }[] | null)?.[0]
-      const rowCount = totalCountRow == null ? null : Number(totalCountRow.cnt)
+  const rows = await duckAll(`SELECT * FROM (${sql}) __preview LIMIT ${PREVIEW_LIMIT}`)
 
-      conn.all(`SELECT * FROM (${sql}) __preview LIMIT 50`, (err, rows) => {
-        if (err) return reject(new Error(err.message))
-        try {
-          if (!rows?.length) return resolve({ columns: [], rows: [], rowCount })
-          const columns = Object.keys(rows[0] as object)
-          const data = (rows as Record<string, unknown>[]).map((r) =>
-            columns.map((c) => {
-              const v = r[c]
-              if (v === null || v === undefined) return null
-              if (v instanceof Date) return v.toISOString()
-              if (typeof v === 'bigint') return String(v)
-              // DuckDB STRUCT/LIST/JSON types come back as JS objects — sanitize
-              // BigInts inside them before stringifying (JSON.stringify(BigInt) is fatal)
-              if (typeof v === 'object') return JSON.stringify(sanitizeBigInts(v))
-              return String(v)
-            })
-          )
-          resolve({ columns, rows: data, rowCount })
-        } catch (e) {
-          reject(e instanceof Error ? e : new Error(String(e)))
-        }
-      })
+  // Only pay for the full COUNT(*) pass when the page is full — otherwise the
+  // page length IS the total (saves a second full pipeline execution per click).
+  let rowCount = rows.length
+  if (rows.length === PREVIEW_LIMIT) {
+    const countRows = await duckAll(`SELECT COUNT(*) AS cnt FROM (${sql}) __preview_count`)
+    rowCount = countRows[0]?.cnt == null ? rows.length : Number(countRows[0].cnt)
+  }
+
+  if (!rows.length) return { columns: [], rows: [], rowCount }
+  const columns = Object.keys(rows[0])
+  const data = rows.map((r) =>
+    columns.map((c) => {
+      const v = r[c]
+      if (v === null || v === undefined) return null
+      if (v instanceof Date) return v.toISOString()
+      if (typeof v === 'bigint') return String(v)
+      // DuckDB STRUCT/LIST/JSON types come back as JS objects — sanitize
+      // BigInts inside them before stringifying (JSON.stringify(BigInt) is fatal)
+      if (typeof v === 'object') return JSON.stringify(sanitizeBigInts(v))
+      return String(v)
     })
-  })
+  )
+  return { columns, rows: data, rowCount }
 })
 
 // Profile a SQL query — per-column data-quality stats for the Report node.
@@ -378,9 +392,23 @@ ipcMain.handle('project:load', async (): Promise<{ path: string; data: string } 
   return { path, data }
 })
 
-// ─── PostgreSQL handlers ──────────────────────────────────────────────────────
+// ─── Secrets (safeStorage) ────────────────────────────────────────────────────
 
-interface PgConfig { host: string; port: number; database: string; user: string; password: string; ssl: boolean }
+ipcMain.handle('secure:encrypt', async (_, plain: string): Promise<string | null> => {
+  if (!safeStorage.isEncryptionAvailable()) return null
+  return safeStorage.encryptString(plain).toString('base64')
+})
+
+ipcMain.handle('secure:decrypt', async (_, encrypted: string): Promise<string | null> => {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null
+    return safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+  } catch {
+    return null  // wrong machine / corrupted payload
+  }
+})
+
+// ─── PostgreSQL handlers ──────────────────────────────────────────────────────
 
 /** Escape a CSV field value */
 function csvField(v: unknown): string {
@@ -411,21 +439,12 @@ function pgCachePath(config: PgConfig, query: string): string {
 
 /** Sniff column types from a CSV file using DuckDB */
 function sniffCSVColumns(csvPath: string): Promise<ColumnInfo[]> {
-  return new Promise((resolve, reject) => {
-    const safe = csvPath.replace(/'/g, "''")
-    conn.run(`CREATE OR REPLACE VIEW __pg_sniff AS SELECT * FROM read_csv_auto('${safe}') LIMIT 0`, (err) => {
-      if (err) return reject(err)
-      conn.all('DESCRIBE __pg_sniff', (descErr, rows) => {
-        if (descErr) return reject(descErr)
-        resolve((rows as DescribeRow[]).map((r) => ({ name: r.column_name, type: normalizeType(r.column_type) })))
-      })
-    })
-  })
+  return sniffSchema(`read_csv_auto('${csvPath.replace(/'/g, "''")}')`)
 }
 
 // Test a PostgreSQL connection
 ipcMain.handle('pg:test', async (_, config: PgConfig): Promise<{ ok: boolean; error?: string }> => {
-  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 5000 })
+  const pool = makePool(config, 5000)
   try {
     const client = await pool.connect()
     client.release()
@@ -439,7 +458,7 @@ ipcMain.handle('pg:test', async (_, config: PgConfig): Promise<{ ok: boolean; er
 
 // Fetch from PG, write to temp CSV, return metadata
 ipcMain.handle('pg:fetch', async (_, config: PgConfig, query: string): Promise<{ csvPath: string; columns: ColumnInfo[]; rowCount: number }> => {
-  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false })
+  const pool = makePool(config)
   try {
     const result = await pool.query(query)
     await pool.end()
@@ -461,13 +480,16 @@ ipcMain.handle('pg:fetch-cached', async (_, config: PgConfig, query: string, for
   if (!force && existsSync(cachePath)) {
     const stat = await fs.stat(cachePath)
     const columns = await sniffCSVColumns(cachePath)
-    // Count rows (subtract header)
-    const content = await fs.readFile(cachePath, 'utf-8')
-    const rowCount = Math.max(0, content.split('\n').filter(Boolean).length - 1)
+    // Count via DuckDB — avoids loading the whole file into memory and is
+    // correct for quoted fields containing embedded newlines.
+    const countRows = await duckAll(
+      `SELECT COUNT(*) AS cnt FROM read_csv_auto('${cachePath.replace(/'/g, "''")}')`
+    )
+    const rowCount = countRows[0]?.cnt == null ? 0 : Number(countRows[0].cnt)
     return { csvPath: cachePath, columns, rowCount, fromCache: true, cacheDate: stat.mtime.toISOString() }
   }
   // Fetch fresh data
-  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false })
+  const pool = makePool(config)
   try {
     const result = await pool.query(query)
     await pool.end()
@@ -483,7 +505,7 @@ ipcMain.handle('pg:fetch-cached', async (_, config: PgConfig, query: string, for
 
 // List all user schemas and tables (+ views) in a PostgreSQL database
 ipcMain.handle('pg:list-tables', async (_, config: PgConfig): Promise<{ schema: string; name: string }[]> => {
-  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 8000 })
+  const pool = makePool(config, 8000)
   try {
     const result = await pool.query(`
       SELECT table_schema AS schema, table_name AS name
@@ -502,7 +524,7 @@ ipcMain.handle('pg:list-tables', async (_, config: PgConfig): Promise<{ schema: 
 
 // Describe columns of a specific table in a PostgreSQL database
 ipcMain.handle('pg:describe-table', async (_, config: PgConfig, schema: string, tableName: string): Promise<{ name: string; type: string }[]> => {
-  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 8000 })
+  const pool = makePool(config, 8000)
   try {
     const result = await pool.query(
       `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
@@ -554,27 +576,46 @@ ipcMain.handle('materialize:run', async (_, { sql, existingPath }: { sql: string
   return { parquetPath, columns }
 })
 
+// ─── Execution cancellation ──────────────────────────────────────────────────
+// One flag covers the whole app: the renderer runs plan actions sequentially,
+// so at most one cancellable operation (pg:write, api:paginated) is in flight.
+// Each one clears the flag when it starts, so a cancel that landed between
+// actions can't kill the next run.
+let cancelRequested = false
+
+ipcMain.handle('exec:cancel', async (): Promise<void> => {
+  cancelRequested = true
+})
+
+function throwIfCancelled(): void {
+  if (cancelRequested) throw new Error(EXEC_CANCELLED)
+}
+
 // Execute DuckDB SQL → insert into PG table
-ipcMain.handle('pg:write', async (event, config: PgConfig, sql: string, tableName: string, writeMode: string): Promise<{ rowCount: number }> => {
+ipcMain.handle('pg:write', async (event, config: PgConfig, sql: string, target: PgWriteTarget, writeMode: string): Promise<{ rowCount: number }> => {
+  cancelRequested = false
   // 1. Run pipeline SQL in DuckDB to get rows
-  const rows: Record<string, unknown>[] = await new Promise((resolve, reject) => {
-    conn.all(sql, (err, r) => err ? reject(new Error(err.message)) : resolve(r as Record<string, unknown>[]))
-  })
+  const rows = await duckAll(sql)
   if (!rows.length) return { rowCount: 0 }
 
+  // Properly quoted table reference — mixed-case / special-char identifiers work,
+  // and the renderer can no longer smuggle SQL through the table name.
+  const tableRef = (target.schema ? quoteIdent(target.schema) + '.' : '') + quoteIdent(target.table)
+
   const columns = Object.keys(rows[0])
-  const pool = new Pool({ host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, ssl: config.ssl ? { rejectUnauthorized: false } : false })
+  const pool = makePool(config)
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
     if (writeMode === 'replace') {
-      await client.query(`TRUNCATE TABLE ${tableName} CASCADE`)
+      await client.query(`TRUNCATE TABLE ${tableRef} CASCADE`)
     }
-    // Insert in batches of 100
-    const BATCH = 100
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const batch = rows.slice(i, i + BATCH)
-      const colList = columns.map((c) => `"${c}"`).join(', ')
+    // Batch size derived from Postgres' 65535-parameter limit, with headroom.
+    const batchSize = Math.max(1, Math.floor(30000 / columns.length))
+    const colList = columns.map(quoteIdent).join(', ')
+    for (let i = 0; i < rows.length; i += batchSize) {
+      throwIfCancelled() // → catch below rolls the transaction back
+      const batch = rows.slice(i, i + batchSize)
       const placeholders = batch.map((_, ri) =>
         `(${columns.map((_, ci) => `$${ri * columns.length + ci + 1}`).join(', ')})`
       ).join(', ')
@@ -582,7 +623,7 @@ ipcMain.handle('pg:write', async (event, config: PgConfig, sql: string, tableNam
         const v = row[c]
         return (typeof v === 'bigint') ? Number(v) : v
       }))
-      await client.query(`INSERT INTO ${tableName} (${colList}) VALUES ${placeholders}`, values)
+      await client.query(`INSERT INTO ${tableRef} (${colList}) VALUES ${placeholders}`, values)
       event.sender.send('pg:write-progress', i + batch.length, rows.length)
     }
     await client.query('COMMIT')
@@ -593,6 +634,61 @@ ipcMain.handle('pg:write', async (event, config: PgConfig, sql: string, tableNam
   } finally {
     client.release()
     await pool.end()
+  }
+})
+
+// Execute DuckDB SQL → UPDATE rows in PG table using a parameterized statement per row
+ipcMain.handle('pg:update-rows', async (event, config: PgConfig, sql: string, target: PgWriteTarget, pkColumn: string, updateColumns: string[]): Promise<{ rowCount: number }> => {
+  cancelRequested = false
+  const rows = await duckAll(sql)
+  if (!rows.length) return { rowCount: 0 }
+
+  const tableRef = (target.schema ? quoteIdent(target.schema) + '.' : '') + quoteIdent(target.table)
+  const allCols = Object.keys(rows[0])
+  const setCols = (updateColumns.length > 0 ? updateColumns : allCols).filter((c) => c !== pkColumn)
+  if (!setCols.length) return { rowCount: 0 }
+
+  const setClause = setCols.map((c, i) => `${quoteIdent(c)} = $${i + 1}`).join(', ')
+  const pkIdx = setCols.length + 1
+  const stmt = `UPDATE ${tableRef} SET ${setClause} WHERE ${quoteIdent(pkColumn)} = $${pkIdx}`
+
+  const pool = makePool(config)
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    for (let i = 0; i < rows.length; i++) {
+      throwIfCancelled()
+      const row = rows[i]
+      const vals = [
+        ...setCols.map((c) => { const v = row[c]; return typeof v === 'bigint' ? Number(v) : v }),
+        (() => { const v = row[pkColumn]; return typeof v === 'bigint' ? Number(v) : v })(),
+      ]
+      await client.query(stmt, vals)
+      if (i % 50 === 0 || i === rows.length - 1) {
+        event.sender.send('pg:update-progress', i + 1, rows.length)
+      }
+    }
+    await client.query('COMMIT')
+    return { rowCount: rows.length }
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+    await pool.end()
+  }
+})
+
+// Execute arbitrary SQL against a PostgreSQL database
+ipcMain.handle('pg:exec-query', async (_, config: PgConfig, sql: string): Promise<{ rowCount: number | null }> => {
+  const pool = makePool(config)
+  try {
+    const result = await pool.query(sql)
+    await pool.end()
+    return { rowCount: result.rowCount ?? null }
+  } catch (err) {
+    await pool.end().catch(() => {})
+    throw err
   }
 })
 
@@ -608,7 +704,12 @@ function sanitizeBigInts(obj: unknown): unknown {
 
 function extractByPath(obj: unknown, path: string): unknown {
   if (!path || path === '$') return obj
-  const parts = path.replace(/^\$\.?/, '').split('.')
+  // Normalize bracket indices so "$.data[0].items" walks like "$.data.0.items"
+  const parts = path
+    .replace(/^\$\.?/, '')
+    .replace(/\[(\d+)\]/g, '.$1')
+    .split('.')
+    .filter(Boolean)
   let current = obj
   for (const part of parts) {
     if (current == null) return null
@@ -641,40 +742,10 @@ function ensureApiCacheDir(): string {
 }
 
 async function inferApiColumns(jsonPath: string): Promise<ColumnInfo[]> {
-  const safe = jsonPath.replace(/'/g, "''")
-  return new Promise((resolve, reject) => {
-    conn.run(
-      `CREATE OR REPLACE VIEW __api_schema_sniff AS SELECT * FROM read_json_auto('${safe}', format='array') LIMIT 0`,
-      (err) => {
-        if (err) return reject(new Error(`Schema inference failed: ${err.message}`))
-        conn.all('DESCRIBE __api_schema_sniff', (descErr, rows) => {
-          if (descErr) return reject(new Error(descErr.message))
-          resolve((rows as DescribeRow[]).map((r) => ({
-            name: r.column_name,
-            type: normalizeType(r.column_type),
-          })))
-        })
-      }
-    )
-  })
+  return sniffSchema(`read_json_auto('${jsonPath.replace(/'/g, "''")}', format='array')`)
 }
 
 // ─── api:fetch ────────────────────────────────────────────────────────────────
-
-interface ApiFetchParams {
-  url: string
-  method: string
-  headers: Record<string, string>
-  body?: string
-  upstreamSQL?: string
-  nodeId: string
-}
-
-interface ApiFetchResult {
-  jsonPath: string
-  columns: ColumnInfo[]
-  rowCount: number
-}
 
 ipcMain.handle('api:fetch', async (_, params: ApiFetchParams): Promise<ApiFetchResult> => {
   const { url, method, headers, body, upstreamSQL, nodeId } = params
@@ -708,14 +779,6 @@ ipcMain.handle('api:fetch', async (_, params: ApiFetchParams): Promise<ApiFetchR
 
 // ─── api:auth ─────────────────────────────────────────────────────────────────
 
-interface ApiAuthParams {
-  url: string
-  method: string
-  headers: Record<string, string>
-  body?: string
-  tokenPath: string
-}
-
 ipcMain.handle('api:auth', async (_, params: ApiAuthParams): Promise<{ token: string }> => {
   const { url, method, headers, body, tokenPath } = params
 
@@ -738,33 +801,8 @@ ipcMain.handle('api:auth', async (_, params: ApiAuthParams): Promise<{ token: st
 
 // ─── api:paginated ────────────────────────────────────────────────────────────
 
-interface ApiPaginatedParams {
-  url: string
-  headers: Record<string, string>
-  strategy: 'page' | 'offset' | 'cursor' | 'link-header'
-  pageParam?: string
-  pageStart?: number
-  offsetParam?: string
-  limitParam?: string
-  limitValue?: number
-  cursorPath?: string
-  cursorParam?: string
-  cursorIn?: 'query' | 'body'
-  dataPath?: string
-  maxPages?: number
-  failOnError?: boolean
-  nodeId: string
-}
-
-interface ApiPaginatedResult {
-  jsonPath: string
-  columns: ColumnInfo[]
-  rowCount: number
-  pagesFetched: number
-  hadErrors: boolean
-}
-
 ipcMain.handle('api:paginated', async (_, params: ApiPaginatedParams): Promise<ApiPaginatedResult> => {
+  cancelRequested = false
   const {
     url, headers, strategy, nodeId,
     pageParam = 'page', pageStart = 1,
@@ -781,6 +819,8 @@ ipcMain.handle('api:paginated', async (_, params: ApiPaginatedParams): Promise<A
   let nextUrl: string = url
 
   while (!done && pagesFetched < maxPages) {
+    // Outside the try below — failOnError must not downgrade a cancel to hadErrors
+    throwIfCancelled()
     let requestUrl = url
     let requestBody: string | undefined
 
@@ -865,45 +905,8 @@ function normalizeType(raw: string): string {
   return raw
 }
 
-// ─── Shared types ─────────────────────────────────────────────────────────────
-
-export interface ColumnInfo {
-  name: string
-  type: string
-}
-
-export interface CSVSelectResult {
-  filePath: string
-  fileName: string
-  columns: ColumnInfo[]
-}
-
-export interface PreviewResult {
-  columns: string[]
-  rows: (string | null)[][]
-  rowCount: number | null
-}
-
-export interface ExportResult {
-  filePath: string
-  rowCount: number | null
-}
-
-export interface ReportColumnStat {
-  name: string
-  type: string
-  nonNull: number
-  distinct: number
-  min: string | null
-  max: string | null
-  blank: number
-  top: { value: string | null; count: number }[]
-}
-
-export interface ReportResult {
-  rowCount: number
-  columns: ReportColumnStat[]
-}
+// ─── Local types ──────────────────────────────────────────────────────────────
+// (everything IPC-crossing lives in src/shared/ipc.ts)
 
 interface DescribeRow {
   column_name: string

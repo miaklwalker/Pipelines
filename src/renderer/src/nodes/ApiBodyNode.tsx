@@ -1,14 +1,14 @@
 import { memo, useState, useCallback } from 'react'
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useReactFlow, useNodeConnections, type NodeProps } from '@xyflow/react'
 import { Send, RefreshCw, Play, Loader, CheckCircle, AlertCircle } from 'lucide-react'
 import type { AppNode, AppEdge, ApiBodyNodeData } from '../lib/types'
-import { buildNodeSQL } from '../lib/sqlBuilder'
+import { executeApiNode } from '../lib/apiExec'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, tokenHandle, HEADER_ROW_IN, TOP_RIGHT_ROW_OUT } from './shared/handles'
 import { ColumnList } from './shared/columns'
-import { resolveToken, buildHeaders, formatLastFetched, HeadersEditor } from './ApiGetNode'
+import { formatLastFetched, HeadersEditor } from './ApiGetNode'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -25,38 +25,23 @@ function ApiBodyNodeComponent({ id, data, selected }: Props) {
     [id, setNodes]
   )
 
-  const edges = getEdges() as AppEdge[]
-  const tokenConnected = edges.some((e) => e.target === id && e.targetHandle === 'token-in')
-  const rowInConnected  = edges.some((e) => e.target === id && e.targetHandle === 'row-in')
+  // Reactive — re-render when the token / row wires are connected or removed
+  const tokenConnected = useNodeConnections({ handleType: 'target', handleId: 'token-in' }).length > 0
+  const rowInConnected = useNodeConnections({ handleType: 'target', handleId: 'row-in' }).length > 0
 
   const handleFetch = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!url.trim()) { update({ status: 'error', error: 'Enter a URL first' }); return }
     update({ status: 'fetching', error: undefined })
     try {
-      const hdrs = buildHeaders(headers)
-      const tok = resolveToken(id, getEdges as () => AppEdge[], getNodes as () => AppNode[])
-      if (tok) hdrs[tok.headerName] = tok.headerValue
-
-      let upstreamSQL: string | undefined
-      let body: string | undefined
-
-      if (bodyMode === 'upstream' && rowInConnected) {
-        const nodes = getNodes() as AppNode[]
-        const rowEdge = edges.find((edge) => edge.target === id && edge.targetHandle === 'row-in')
-        if (rowEdge) {
-          upstreamSQL = buildNodeSQL(rowEdge.source, nodes, edges, rowEdge.sourceHandle ?? undefined) ?? undefined
-        }
-      } else if (staticBody.trim()) {
-        body = staticBody.trim()
-      }
-
-      const result = await window.api.apiFetch({ url: url.trim(), method: data.method, headers: hdrs, body, upstreamSQL, nodeId: id })
-      update({ jsonPath: result.jsonPath, columns: result.columns, rowCount: result.rowCount, status: 'done', error: undefined, lastFetched: new Date().toISOString() })
+      const nodes = getNodes() as AppNode[]
+      const edges = getEdges() as AppEdge[]
+      const node = nodes.find((n) => n.id === id)
+      if (!node) return
+      update(await executeApiNode(node, nodes, edges))
     } catch (err) {
       update({ status: 'error', error: err instanceof Error ? err.message : String(err) })
     }
-  }, [id, url, headers, bodyMode, staticBody, rowInConnected, data.method, getEdges, getNodes, edges, update])
+  }, [id, getEdges, getNodes, update])
 
   const hasOutput = !!data.jsonPath && columns.length > 0
   const isLoading = status === 'fetching'

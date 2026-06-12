@@ -1,44 +1,19 @@
 import type { Node, Edge } from '@xyflow/react'
+import type { ColumnInfo, PgConfig, ReportResult, TableEntry } from '../../../shared/ipc'
 
-export interface ColumnInfo {
-  name: string
-  type: string
-}
-
-export interface CSVSelectResult {
-  filePath: string
-  fileName: string
-  columns: ColumnInfo[]
-}
-
-export interface PreviewResult {
-  columns: string[]
-  rows: (string | null)[][]
-  rowCount: number | null
-}
-
-export interface ExportResult {
-  filePath: string
-  rowCount: number | null
-}
-
-// ─── Report node (data profile) ──────────────────────────────────────────────
-
-export interface ReportColumnStat {
-  name: string
-  type: string
-  nonNull: number
-  distinct: number
-  min: string | null
-  max: string | null
-  blank: number
-  top: { value: string | null; count: number }[]
-}
-
-export interface ReportResult {
-  rowCount: number
-  columns: ReportColumnStat[]
-}
+// IPC-crossing types live in src/shared/ipc.ts (single source for main,
+// preload, and renderer). Re-exported here so existing imports keep working.
+export type {
+  ColumnInfo,
+  CSVSelectResult,
+  PreviewResult,
+  ExportResult,
+  ReportColumnStat,
+  ReportResult,
+  PgConfig,
+  PgFetchResult,
+  TableEntry,
+} from '../../../shared/ipc'
 
 export interface ReportNodeData extends Record<string, unknown> {
   inputColumns: ColumnInfo[]
@@ -164,23 +139,7 @@ export interface IncrementValueData extends Record<string, unknown> {
 }
 
 // ─── PostgreSQL types ────────────────────────────────────────────────────────
-
-export interface PgConfig {
-  host: string
-  port: number
-  database: string
-  user: string
-  password: string
-  ssl: boolean
-}
-
-export interface PgFetchResult {
-  csvPath: string
-  columns: ColumnInfo[]
-  rowCount: number
-  fromCache?: boolean
-  cacheDate?: string
-}
+// PgConfig / PgFetchResult re-exported from shared/ipc above.
 
 export type DbReadMode = 'table' | 'sql'
 export type DbWriteMode = 'append' | 'replace'
@@ -219,6 +178,8 @@ export interface ReadTableCachedNodeData extends Record<string, unknown> {
   dbSelectedTable?: string | null
   dbStatus?: 'idle' | 'browsing' | 'error'
   dbError?: string
+  /** When true, a fresh fetch (not a cache hit) runs the downstream subgraph */
+  cascadeRun?: boolean
 }
 
 export interface WriteTableNodeData extends Record<string, unknown> {
@@ -326,6 +287,31 @@ export interface CsvBase64Data extends Record<string, unknown> {
   encodeError?: string
 }
 
+export interface UpdateDbRowNodeData extends Record<string, unknown> {
+  tableName: string
+  pkColumn: string
+  updateColumns: string[]
+  status: 'idle' | 'updating' | 'done' | 'error'
+  rowCount: number | null
+  error?: string
+  updateProgress?: { written: number; total: number } | null
+  dbTables?: TableEntry[]
+  dbSelectedSchema?: string | null
+  dbStatus?: 'idle' | 'browsing' | 'loading' | 'error'
+  dbError?: string
+  resolvedConfig?: PgConfig | null
+  inputColumns: ColumnInfo[]
+  targetColumns: ColumnInfo[]
+}
+
+export interface RawQueryNodeData extends Record<string, unknown> {
+  sql: string
+  status: 'idle' | 'running' | 'done' | 'error'
+  rowCount: number | null
+  error?: string
+  resolvedConfig?: PgConfig | null
+}
+
 export interface MaterializeNodeData extends Record<string, unknown> {
   /** Path to the written parquet file; null = not yet materialized */
   parquetPath: string | null
@@ -333,14 +319,12 @@ export interface MaterializeNodeData extends Record<string, unknown> {
   status: 'idle' | 'running' | 'done' | 'error'
   error?: string
   rowCount: number | null
+  /** When true, a manual re-materialize runs the downstream subgraph afterwards */
+  cascadeRun?: boolean
 }
 
 // ─── Schema browser ──────────────────────────────────────────────────────────
-
-export interface TableEntry {
-  schema: string
-  name: string
-}
+// TableEntry re-exported from shared/ipc above.
 
 export interface BrowseSchemaNodeData extends Record<string, unknown> {
   tables: TableEntry[]
@@ -477,5 +461,7 @@ export type AppNode =
   | Node<ApiBodyNodeData,         'api-patch'>
   | Node<ApiAuthNodeData,         'api-auth'>
   | Node<ApiPaginatedNodeData,    'api-paginated'>
+  | Node<UpdateDbRowNodeData,     'update-db-row'>
+  | Node<RawQueryNodeData,        'raw-query'>
 
 export type AppEdge = Edge

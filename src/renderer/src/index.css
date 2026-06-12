@@ -953,6 +953,17 @@ html, body, #root {
   cursor: not-allowed;
 }
 
+/* ── Stop button (topbar) ────────────────────────────── */
+.topbar-btn-stop {
+  background: rgba(239,68,68,0.1);
+  color: var(--red);
+  border-color: rgba(239,68,68,0.3);
+}
+.topbar-btn-stop:hover:not(:disabled) {
+  background: rgba(239,68,68,0.2);
+  border-color: rgba(239,68,68,0.5);
+}
+
 /* ── Full execution toggle button ───────────────────── */
 .topbar-btn-full-active {
   background: rgba(99,102,241,0.15);

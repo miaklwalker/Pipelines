@@ -2,18 +2,19 @@ import { memo, useCallback, useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { Upload, Loader, CheckCircle, AlertCircle } from 'lucide-react'
 import type { AppNode, WriteTableNodeData } from '../lib/types'
-import { buildNodeSQL } from '../lib/sqlBuilder'
 import NodeHeader from './shared/NodeHeader'
 import { registerNode, type NodeDef } from './registry'
 import { PipelineNode } from './shared/PipelineNode'
 import { rowHandle, connHandle } from './shared/handles'
 import SchemaTableBrowser from './shared/SchemaTableBrowser'
+import { usePipelineActions } from '../contexts/PipelineActionsContext'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 type Props = NodeProps<AppNode & { data: WriteTableNodeData }>
 
 function WriteTableNode({ id, data, selected }: Props) {
-  const { setNodes, getNodes, getEdges } = useReactFlow()
+  const { setNodes } = useReactFlow()
+  const { runSink } = usePipelineActions()
   const {
     tableName = '', writeMode = 'append',
     status = 'idle', rowCount = null, error, resolvedConfig,
@@ -55,36 +56,14 @@ function WriteTableNode({ id, data, selected }: Props) {
     })
   }, [update])
 
-  // ── Write ────────────────────────────────────────────────────────────────────
-  const handleWrite = useCallback(async (e: React.MouseEvent) => {
+  // ── Write — runs this sink through the shared execution engine ──────────────
+  // (Same code path as the topbar Run button: SQL build, quoted identifiers,
+  // progress events, and status updates all live in one place.)
+  const handleWrite = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     if (!resolvedConfig || !tableName) return
-
-    const nodes = getNodes()
-    const edges = getEdges()
-    const inputEdge = edges.find((ev) => ev.target === id && ev.targetHandle === 'row-in')
-    if (!inputEdge) return
-    const sql = buildNodeSQL(inputEdge.source, nodes as AppNode[], edges as ReturnType<typeof getEdges>, inputEdge.sourceHandle ?? undefined)
-    if (!sql) return
-
-    // Build the table reference passed to pgWrite.
-    // pgWrite quotes identifiers itself, so we provide plain schema.table —
-    // exactly what a user would type manually (e.g. "surplus.brand").
-    const qualifiedTable = dbSelectedSchema ? `${dbSelectedSchema}.${tableName}` : tableName
-
-    update({ status: 'writing', error: undefined, rowCount: null, writeProgress: null })
-    window.api.onPgWriteProgress((written, total) => {
-      update({ writeProgress: { written, total } })
-    })
-    try {
-      const result = await window.api.pgWrite(resolvedConfig, sql, qualifiedTable, writeMode)
-      window.api.offPgWriteProgress()
-      update({ status: 'done', rowCount: result.rowCount, writeProgress: null })
-    } catch (err) {
-      window.api.offPgWriteProgress()
-      update({ status: 'error', error: String(err), writeProgress: null })
-    }
-  }, [id, resolvedConfig, tableName, writeMode, getNodes, getEdges, update])
+    runSink(id)
+  }, [id, resolvedConfig, tableName, runSink])
 
   const hasInput    = inputColumns.length > 0
   const isConnected = !!resolvedConfig

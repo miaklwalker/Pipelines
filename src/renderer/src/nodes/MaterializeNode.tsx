@@ -15,7 +15,7 @@ type Props = NodeProps<AppNode & { data: MaterializeNodeData }>
 
 function MaterializeNode({ id, data, selected }: Props) {
   const { getNodes, getEdges, setNodes } = useReactFlow()
-  const { parquetPath, columns = [], rowCount, error } = data
+  const { parquetPath, columns = [], rowCount, error, cascadeRun = false } = data
   const { runDownstreamSinks } = usePipelineActions()
 
   const [running, setRunning] = useState(false)
@@ -60,13 +60,14 @@ function MaterializeNode({ id, data, selected }: Props) {
         rowCount: cnt != null ? Number(cnt) : null,
         error: undefined,
       })
-      runDownstreamSinks(id)
+      // Cascading into downstream writes is opt-in per node
+      if (cascadeRun) runDownstreamSinks(id)
     } catch (err) {
       update({ status: 'error', error: err instanceof Error ? err.message : String(err) })
     } finally {
       setRunning(false)
     }
-  }, [id, parquetPath, getNodes, getEdges, update, runDownstreamSinks])
+  }, [id, parquetPath, cascadeRun, getNodes, getEdges, update, runDownstreamSinks])
 
   const stopProp = useCallback((e: React.MouseEvent) => e.stopPropagation(), [])
 
@@ -125,6 +126,21 @@ function MaterializeNode({ id, data, selected }: Props) {
           {btnLabel}
         </button>
 
+        {/* Cascade control — opt-in downstream run after re-materializing */}
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 10.5, color: 'var(--text-dim)', marginTop: 6 }}
+          onClick={stopProp} onMouseDown={stopProp}
+          title="After re-materializing, automatically re-run everything downstream (including output sinks)."
+        >
+          <input
+            type="checkbox"
+            checked={cascadeRun}
+            onChange={(e) => update({ cascadeRun: e.target.checked })}
+            style={{ cursor: 'pointer', accentColor: 'var(--blue)' }}
+          />
+          Run downstream after refresh
+        </label>
+
         {error && (
           <div style={{ marginTop: 6, fontSize: 10, color: 'var(--red)', wordBreak: 'break-all' }}>
             {error}
@@ -155,11 +171,12 @@ export const materializeDef: NodeDef<MaterializeNodeData> = {
       'Use this to cache an expensive join or aggregate so downstream branches don\'t re-run it.',
       'Click Re-materialize to refresh the snapshot with the latest upstream data.',
       'The Parquet file lives in your system temp folder and is replaced each time you materialize.',
+      'Enable "Run downstream after refresh" to automatically re-run dependent outputs after re-materializing.',
     ],
   },
   inputPorts:  [{ type: 'row' }],
   outputPorts: [{ type: 'row' }, { type: 'col' }],
-  defaultData: () => ({ parquetPath: null, columns: [], status: 'idle', rowCount: null }),
+  defaultData: () => ({ parquetPath: null, columns: [], status: 'idle', rowCount: null, cascadeRun: false }),
   Component: Memoized,
 }
 
