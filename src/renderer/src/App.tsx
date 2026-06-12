@@ -363,7 +363,7 @@ export default function App() {
     const srcRow = src === 'row-out' || src === 'row-out-pass' || src === 'row-out-fail'
     // Row target handles (including Filter's val-in and emitter anchor-in)
     const tgtRow = tgt === 'row-left' || tgt === 'row-right' || tgt === 'row-in'
-      || tgt === 'val-in' || tgt === 'anchor-in'
+      || tgt === 'row-ref' || tgt === 'val-in' || tgt === 'anchor-in'
     // Column handles (emitters use plain 'col-out', others use 'col-out-{name}')
     const srcCol  = src.startsWith('col-out-') || src === 'col-out'
     const tgtCol  = tgt.startsWith('col-in-')

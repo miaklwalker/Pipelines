@@ -136,8 +136,8 @@ describe('json-extract', () => {
       },
     } as AppNode
     const sql = buildNodeSQL('n2', [src, unnest, node], [edge('e1', 'n0', 'n1'), edge('e2', 'n1', 'n2')])
-    expect(sql).toContain('json_extract_string("item", \'$.sku\') AS "sku"')
-    expect(sql).toContain('CAST(json_extract("item", \'$.qty\') AS BIGINT) AS "qty"')
+    expect(sql).toContain('json_extract_string(to_json("item"), \'$.sku\') AS "sku"')
+    expect(sql).toContain('CAST(json_extract(to_json("item"), \'$.qty\') AS BIGINT) AS "qty"')
     expect(sql).toContain('SELECT *,')
   })
 
@@ -1266,5 +1266,169 @@ describe('getNodeOutputColumns', () => {
     } as AppNode
     const cols = getNodeOutputColumns('n2', [src, lim], [edge('e1', 'n1', 'n2')])
     expect(cols.map((c) => c.name)).toEqual(['a', 'b', 'c'])
+  })
+})
+
+// ── default-value ─────────────────────────────────────────────────────────────
+
+describe('default-value', () => {
+  function dvNode(id: string, data: Record<string, unknown>): AppNode {
+    return {
+      id, type: 'default-value', position: pos,
+      data: {
+        targetColumn: 'status', defaultValue: 'unknown',
+        matchNull: true, matchEmpty: false, matchCustomEnabled: false, matchValue: '',
+        inputColumns: [{ name: 'id', type: 'INTEGER' }, { name: 'status', type: 'TEXT' }],
+        ...data,
+      },
+    } as AppNode
+  }
+
+  it('replaces NULLs with the typed literal via * REPLACE', () => {
+    const src = csvNode('n1', '/f.csv', ['id', 'status'])
+    const dv = dvNode('n2', {})
+    const sql = buildNodeSQL('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(sql).toContain('SELECT * REPLACE')
+    expect(sql).toContain('"status" IS NULL')
+    expect(sql).toContain("THEN 'unknown' ELSE \"status\"")
+  })
+
+  it('adds empty-string and custom sentinel conditions when enabled', () => {
+    const src = csvNode('n1', '/f.csv', ['id', 'status'])
+    const dv = dvNode('n2', { matchEmpty: true, matchCustomEnabled: true, matchValue: 'N/A' })
+    const sql = buildNodeSQL('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(sql).toContain(`TRIM(CAST("status" AS VARCHAR)) = ''`)
+    expect(sql).toContain(`CAST("status" AS VARCHAR) = 'N/A'`)
+    expect(sql).toContain(' OR ')
+  })
+
+  it('emits numeric defaults unquoted', () => {
+    const src = csvNode('n1', '/f.csv', ['id', 'qty'])
+    const dv = dvNode('n2', { targetColumn: 'qty', defaultValue: '0' })
+    const sql = buildNodeSQL('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(sql).toContain('THEN 0 ELSE "qty"')
+  })
+
+  it('uses a wired emitter as the fallback', () => {
+    const src = csvNode('n1', '/f.csv', ['id', 'status'])
+    const emitter: AppNode = {
+      id: 'n3', type: 'static-value', position: pos,
+      data: { columnName: 'v', value: 'fallback!' },
+    } as AppNode
+    const dv = dvNode('n2', { defaultValue: '' })
+    const edges = [edge('e1', 'n1', 'n2'), edge('e2', 'n3', 'n2', 'col-out', 'col-in-default')]
+    const sql = buildNodeSQL('n2', [src, dv, emitter], edges)
+    expect(sql).toContain("THEN 'fallback!' ELSE \"status\"")
+  })
+
+  it('passes rows through unchanged when no target column is set', () => {
+    const src = csvNode('n1', '/f.csv', ['id', 'status'])
+    const dv = dvNode('n2', { targetColumn: '' })
+    const sql = buildNodeSQL('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(sql).not.toContain('REPLACE')
+    expect(sql).toContain('SELECT * FROM')
+  })
+
+  it('escapes single quotes in the default value', () => {
+    const src = csvNode('n1', '/f.csv', ['id', 'status'])
+    const dv = dvNode('n2', { defaultValue: "o'brien" })
+    const sql = buildNodeSQL('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(sql).toContain("'o''brien'")
+  })
+
+  it('returns input columns unchanged from getNodeOutputColumns', () => {
+    const src = csvNode('n1', '/f.csv', ['id', 'status'])
+    const dv = dvNode('n2', {})
+    const cols = getNodeOutputColumns('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(cols.map((c) => c.name)).toEqual(['id', 'status'])
+  })
+})
+
+// ── check-reference ───────────────────────────────────────────────────────────
+
+describe('check-reference', () => {
+  function ckNode(id: string, data: Record<string, unknown> = {}): AppNode {
+    return {
+      id, type: 'check-reference', position: pos,
+      data: {
+        fkColumn: 'model_id', refColumn: 'id', allowNull: true,
+        inputColumns: [{ name: 'id', type: 'INTEGER' }, { name: 'model_id', type: 'INTEGER' }],
+        refColumns: [{ name: 'id', type: 'INTEGER' }, { name: 'name', type: 'TEXT' }],
+        ...data,
+      },
+    } as AppNode
+  }
+
+  const graph = () => {
+    const rows = csvNode('n1', '/orders.csv', ['id', 'model_id'])
+    const ref  = csvNode('n2', '/models.csv', ['id', 'name'])
+    const ck   = ckNode('n3')
+    const edges = [
+      edge('e1', 'n1', 'n3', 'row-out', 'row-in'),
+      edge('e2', 'n2', 'n3', 'row-out', 'row-ref'),
+    ]
+    return { nodes: [rows, ref, ck], edges }
+  }
+
+  it('pass branch keeps rows whose FK exists (or is NULL)', () => {
+    const { nodes, edges } = graph()
+    const sql = buildNodeSQL('n3', nodes, edges, 'row-out-pass')
+    expect(sql).toContain('EXISTS (SELECT 1 FROM')
+    expect(sql).toContain('__ref."id" = __ck."model_id"')
+    expect(sql).toContain('__ck."model_id" IS NULL OR')
+    expect(sql).not.toContain('NOT (')
+  })
+
+  it('fail branch returns orphaned rows', () => {
+    const { nodes, edges } = graph()
+    const sql = buildNodeSQL('n3', nodes, edges, 'row-out-fail')
+    expect(sql).toContain('WHERE NOT (')
+    expect(sql).toContain('EXISTS (SELECT 1 FROM')
+  })
+
+  it('treats NULL keys as violations when allowNull is false', () => {
+    const { nodes, edges } = graph()
+    const ck = nodes[2]
+    ck.data = { ...ck.data, allowNull: false }
+    const sql = buildNodeSQL('n3', nodes, edges, 'row-out-pass')
+    expect(sql).not.toContain('IS NULL OR')
+  })
+
+  it('passes all rows when unconfigured (no ref wired)', () => {
+    const rows = csvNode('n1', '/orders.csv', ['id', 'model_id'])
+    const ck   = ckNode('n3')
+    const edges = [edge('e1', 'n1', 'n3', 'row-out', 'row-in')]
+    const pass = buildNodeSQL('n3', [rows, ck], edges, 'row-out-pass')
+    const fail = buildNodeSQL('n3', [rows, ck], edges, 'row-out-fail')
+    expect(pass).not.toContain('EXISTS')
+    expect(fail).toContain('WHERE FALSE')
+  })
+
+  it('per-column pass/fail handles select the right branch', () => {
+    const { nodes, edges } = graph()
+    const pass = buildNodeSQL('n3', nodes, edges, 'col-out-pass-model_id')
+    const fail = buildNodeSQL('n3', nodes, edges, 'col-out-fail-model_id')
+    expect(pass).not.toContain('WHERE NOT')
+    expect(fail).toContain('WHERE NOT')
+  })
+
+  it('returns input columns from getNodeOutputColumns', () => {
+    const { nodes, edges } = graph()
+    const cols = getNodeOutputColumns('n3', nodes, edges)
+    expect(cols.map((c) => c.name)).toEqual(['id', 'model_id'])
+  })
+
+  it('propagateColumns auto-suggests FK and ref key columns', () => {
+    const rows = csvNode('n1', '/orders.csv', ['order_no', 'model_id'])
+    const ref  = csvNode('n2', '/models.csv', ['id', 'name'])
+    const ck   = ckNode('n3', { fkColumn: '', refColumn: '', inputColumns: [], refColumns: [] })
+    const edges = [
+      edge('e1', 'n1', 'n3', 'row-out', 'row-in'),
+      edge('e2', 'n2', 'n3', 'row-out', 'row-ref'),
+    ]
+    const next = propagateColumns([rows, ref, ck], edges)
+    const d = next.find((n) => n.id === 'n3')!.data as Record<string, unknown>
+    expect(d.fkColumn).toBe('model_id')
+    expect(d.refColumn).toBe('id')
   })
 })

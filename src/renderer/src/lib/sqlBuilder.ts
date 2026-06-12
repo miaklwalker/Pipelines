@@ -3,6 +3,7 @@ import type {
   CSVNodeData, JSONNodeData, UnnestNodeData, JsonExtractNodeData, JsonExtractField, JoinNodeData, TransformNodeData, DestinationNodeData, CSVOutputNodeData,
   MergeNodeData, FilterNodeData, StaticValueData, IncrementValueData,
   UniqueNodeData, MapValueData, ConditionalOutputData,
+  DefaultValueData, CheckReferenceData,
   SortNodeData, LimitNodeData, AggregateNodeData,
   ReadTableNodeData, ReadTableCachedNodeData, WriteTableNodeData,
   BrowseSchemaNodeData, JoinColSelection,
@@ -758,6 +759,69 @@ export function buildNodeSQL(
       return `SELECT ${expr} AS "${colName}"`
     }
 
+    case 'default-value': {
+      const d = node.data as DefaultValueData
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      if (!inputEdge) return null
+      const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+      if (!inputSQL) return null
+
+      const col = d.targetColumn?.trim()
+      if (!col) return `SELECT * FROM (${inputSQL}) __dv`
+
+      // Which incoming values count as "missing"
+      const conds: string[] = []
+      if (d.matchNull !== false) conds.push(`"${col}" IS NULL`)
+      if (d.matchEmpty) conds.push(`TRIM(CAST("${col}" AS VARCHAR)) = ''`)
+      if (d.matchCustomEnabled && (d.matchValue ?? '') !== '') {
+        conds.push(`CAST("${col}" AS VARCHAR) = ${sqlStr(d.matchValue!)}`)
+      }
+      if (!conds.length) return `SELECT * FROM (${inputSQL}) __dv`
+
+      // Fallback: wired emitter expression takes precedence over the typed literal
+      let fallback: string | null = null
+      const colEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'col-in-default')
+      if (colEdge) fallback = emitterExpression(colEdge.source, nodes)
+      if (fallback === null) {
+        const raw = (d.defaultValue ?? '').trim()
+        fallback = /^-?\d+(\.\d+)?$/.test(raw) ? raw : sqlStr(d.defaultValue ?? '')
+      }
+
+      return (
+        `SELECT * REPLACE ((CASE WHEN ${conds.join(' OR ')} THEN ${fallback} ELSE "${col}" END) AS "${col}") ` +
+        `FROM (${inputSQL}) __dv`
+      )
+    }
+
+    case 'check-reference': {
+      const d = node.data as CheckReferenceData
+      const inputEdge = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-in')
+      const refEdge   = edges.find((e) => e.target === nodeId && e.targetHandle === 'row-ref')
+      if (!inputEdge) return null
+      const inputSQL = buildNodeSQL(inputEdge.source, nodes, edges, inputEdge.sourceHandle ?? undefined)
+      if (!inputSQL) return null
+
+      const isPass = !outputHandle
+        || outputHandle === 'row-out-pass'
+        || outputHandle.startsWith('col-out-pass-')
+
+      const refSQL = refEdge ? buildNodeSQL(refEdge.source, nodes, edges, refEdge.sourceHandle ?? undefined) : null
+      if (!refSQL || !d.fkColumn || !d.refColumn) {
+        // Not configured yet: every row passes, nothing fails
+        return isPass
+          ? `SELECT * FROM (${inputSQL}) __ck`
+          : `SELECT * FROM (${inputSQL}) __ck WHERE FALSE`
+      }
+
+      const existsCond =
+        `EXISTS (SELECT 1 FROM (${refSQL}) __ref WHERE __ref."${d.refColumn}" = __ck."${d.fkColumn}")`
+      const validCond = d.allowNull !== false
+        ? `(__ck."${d.fkColumn}" IS NULL OR ${existsCond})`
+        : `(${existsCond})`
+      const whereClause = isPass ? validCond : `NOT ${validCond}`
+      return `SELECT * FROM (${inputSQL}) __ck WHERE ${whereClause}`
+    }
+
     case 'unique': {
       const d = node.data as UniqueNodeData
       // Support both new (keyColumns[]) and old (keyColumn string) saves
@@ -1004,6 +1068,12 @@ export function getNodeOutputColumns(
 
     case 'unique':
       return (node.data as UniqueNodeData).inputColumns ?? []
+
+    case 'default-value':
+      return (node.data as DefaultValueData).inputColumns ?? []
+
+    case 'check-reference':
+      return (node.data as CheckReferenceData).inputColumns ?? []
 
     case 'map-value': {
       const d = node.data as MapValueData

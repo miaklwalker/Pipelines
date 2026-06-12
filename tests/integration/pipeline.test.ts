@@ -6,6 +6,8 @@
  * DuckDB is imported directly (no Electron IPC layer).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { writeFileSync } from 'fs'
+import { join } from 'path'
 import duckdb from 'duckdb'
 import { buildNodeSQL } from '../../src/renderer/src/lib/sqlBuilder'
 import { propagateColumns } from '../../src/renderer/src/lib/graphUtils'
@@ -677,3 +679,118 @@ describe('pipeline chains', () => {
   })
 })
 
+
+// ── Default Value ─────────────────────────────────────────────────────────────
+
+describe('default-value', () => {
+  let messy: string
+
+  beforeAll(() => {
+    messy = join(f.dir, 'messy.csv')
+    writeFileSync(messy, 'id,status,qty\n1,complete,5\n2,,\n3,N/A,7\n4,pending,\n')
+  })
+
+  function dvNode(id: string, data: Record<string, unknown>): AppNode {
+    return {
+      id, type: 'default-value', position: pos,
+      data: {
+        targetColumn: 'status', defaultValue: 'unknown',
+        matchNull: true, matchEmpty: false, matchCustomEnabled: false, matchValue: '',
+        inputColumns: [
+          { name: 'id', type: 'INTEGER' }, { name: 'status', type: 'TEXT' }, { name: 'qty', type: 'INTEGER' },
+        ],
+        ...data,
+      },
+    } as AppNode
+  }
+
+  it('fills NULL status values with the literal default', async () => {
+    const src = csvNode('n1', messy, ['id', 'status', 'qty'])
+    const dv = dvNode('n2', {})
+    const rows = await run('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(rows.map((r) => r.status)).toEqual(['complete', 'unknown', 'N/A', 'pending'])
+  })
+
+  it('also replaces a custom sentinel value', async () => {
+    const src = csvNode('n1', messy, ['id', 'status', 'qty'])
+    const dv = dvNode('n2', { matchCustomEnabled: true, matchValue: 'N/A' })
+    const rows = await run('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(rows.map((r) => r.status)).toEqual(['complete', 'unknown', 'unknown', 'pending'])
+  })
+
+  it('fills a numeric column with a numeric default', async () => {
+    const src = csvNode('n1', messy, ['id', 'status', 'qty'])
+    const dv = dvNode('n2', { targetColumn: 'qty', defaultValue: '0' })
+    const rows = await run('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(rows.map((r) => Number(r.qty))).toEqual([5, 0, 7, 0])
+  })
+
+  it('leaves non-matching rows untouched and keeps all columns', async () => {
+    const src = csvNode('n1', messy, ['id', 'status', 'qty'])
+    const dv = dvNode('n2', {})
+    const rows = await run('n2', [src, dv], [edge('e1', 'n1', 'n2')])
+    expect(Object.keys(rows[0]).sort()).toEqual(['id', 'qty', 'status'])
+    expect(rows).toHaveLength(4)
+  })
+})
+
+// ── Check Reference ───────────────────────────────────────────────────────────
+
+describe('check-reference', () => {
+  let badOrders: string
+
+  beforeAll(() => {
+    badOrders = join(f.dir, 'bad_orders.csv')
+    // employee_id 99 is an orphan; row 4 has a NULL employee_id
+    writeFileSync(badOrders, 'order_id,employee_id\n1,1\n2,99\n3,20\n4,\n')
+  })
+
+  function ckNode(id: string, data: Record<string, unknown> = {}): AppNode {
+    return {
+      id, type: 'check-reference', position: pos,
+      data: {
+        fkColumn: 'employee_id', refColumn: 'id', allowNull: true,
+        inputColumns: [{ name: 'order_id', type: 'INTEGER' }, { name: 'employee_id', type: 'INTEGER' }],
+        refColumns: [{ name: 'id', type: 'INTEGER' }, { name: 'name', type: 'TEXT' }],
+        ...data,
+      },
+    } as AppNode
+  }
+
+  function graph(ckData: Record<string, unknown> = {}) {
+    const rows = csvNode('n1', badOrders, ['order_id', 'employee_id'])
+    const ref  = csvNode('n2', f.employees, ['id', 'name', 'department', 'salary', 'country'])
+    const ck   = ckNode('n3', ckData)
+    const edges = [
+      edge('e1', 'n1', 'n3', 'row-out', 'row-in'),
+      edge('e2', 'n2', 'n3', 'row-out', 'row-ref'),
+    ]
+    return { nodes: [rows, ref, ck], edges }
+  }
+
+  it('pass branch keeps resolvable FKs and NULLs', async () => {
+    const { nodes, edges } = graph()
+    const rows = await run('n3', nodes, edges, 'row-out-pass')
+    expect(rows.map((r) => Number(r.order_id)).sort()).toEqual([1, 3, 4])
+  })
+
+  it('fail branch returns only the orphaned row', async () => {
+    const { nodes, edges } = graph()
+    const rows = await run('n3', nodes, edges, 'row-out-fail')
+    expect(rows).toHaveLength(1)
+    expect(Number(rows[0].employee_id)).toBe(99)
+  })
+
+  it('flags NULL keys as violations when allowNull is false', async () => {
+    const { nodes, edges } = graph({ allowNull: false })
+    const rows = await run('n3', nodes, edges, 'row-out-fail')
+    expect(rows.map((r) => Number(r.order_id)).sort()).toEqual([2, 4])
+  })
+
+  it('pass + fail together cover every input row', async () => {
+    const { nodes, edges } = graph()
+    const pass = await run('n3', nodes, edges, 'row-out-pass')
+    const fail = await run('n3', nodes, edges, 'row-out-fail')
+    expect(pass.length + fail.length).toBe(4)
+  })
+})

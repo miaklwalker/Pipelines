@@ -292,11 +292,24 @@ export interface BuildJsonObjectData extends Record<string, unknown> {
 }
 
 export interface DefaultValueData extends Record<string, unknown> {
-  targetColumn: string  // column whose NULLs are filled
+  targetColumn: string  // column whose missing values are filled
   defaultValue: string  // literal fallback when col-in is not wired
+  /** Which incoming values count as "missing" and get replaced */
+  matchNull?: boolean          // NULL (default true)
+  matchEmpty?: boolean         // empty / whitespace-only string
+  matchCustomEnabled?: boolean // a specific sentinel value (e.g. 'N/A')
+  matchValue?: string          // the sentinel to match when matchCustomEnabled
   hasRowIn?: boolean
   hasColIn?: boolean    // true when a col-in emitter is wired
   inputColumns: ColumnInfo[]
+}
+
+export interface CheckReferenceData extends Record<string, unknown> {
+  fkColumn: string             // column in the row stream (e.g. model_id)
+  refColumn: string            // column in the reference table (e.g. id)
+  allowNull: boolean           // NULL foreign keys count as valid
+  inputColumns: ColumnInfo[]   // columns from the row stream
+  refColumns: ColumnInfo[]     // columns from the reference table
 }
 
 export interface CsvBase64Data extends Record<string, unknown> {
@@ -446,6 +459,7 @@ export type AppNode =
   | Node<ConditionalOutputData,  'conditional-output'>
   | Node<BuildJsonObjectData,    'build-json-object'>
   | Node<DefaultValueData,       'default-value'>
+  | Node<CheckReferenceData,     'check-reference'>
   | Node<CsvBase64Data,          'csv-base64'>
   | Node<SortNodeData,            'sort'>
   | Node<LimitNodeData,           'limit'>

@@ -125,6 +125,7 @@ import type {
   JoinNodeData, JoinColSelection, DestinationNodeData,
   ConnectionNodeData, ReadTableNodeData, ReadTableCachedNodeData,
   UnnestNodeData, JsonExtractNodeData,
+  DefaultValueData, CheckReferenceData, IncrementValueData,
 } from './types'
 
 function sourceColumnFromHandle(sourceHandle: string | null | undefined): string | null {
@@ -172,6 +173,41 @@ export function propagateColumns(nodes: AppNode[], edges: AppEdge[]): AppNode[] 
       const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
       const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
       return { ...node, data: { ...node.data, inputColumns: inputCols } }
+    }
+
+    // ── Default Value ─────────────────────────────────────────────────────────
+    if (node.type === 'default-value') {
+      const d = node.data as DefaultValueData
+      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
+      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
+      const hasColIn = edges.some((e) => e.target === node.id && e.targetHandle === 'col-in-default')
+      const targetColumn = inputCols.some((c) => c.name === d.targetColumn) ? d.targetColumn : ''
+      return { ...node, data: { ...d, inputColumns: inputCols, hasRowIn: !!inputEdge, hasColIn, targetColumn } }
+    }
+
+    // ── Check Reference (FK validation) ───────────────────────────────────────
+    if (node.type === 'check-reference') {
+      const d = node.data as CheckReferenceData
+      const inputEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'row-in')
+      const refEdge   = edges.find((e) => e.target === node.id && e.targetHandle === 'row-ref')
+      const inputCols = inputEdge ? getNodeOutputColumns(inputEdge.source, nodes, edges) : []
+      const refCols   = refEdge   ? getNodeOutputColumns(refEdge.source,   nodes, edges) : []
+
+      let fkColumn  = inputCols.some((c) => c.name === d.fkColumn)  ? d.fkColumn  : ''
+      let refColumn = refCols.some((c) => c.name === d.refColumn)   ? d.refColumn : ''
+
+      // Auto-suggest: prefer a *_id column on the stream side, and on the
+      // reference side an "id" column (model_id → model.id) or a same-name match.
+      if (!fkColumn && inputCols.length) {
+        fkColumn = inputCols.find((c) => /_id$/i.test(c.name))?.name ?? ''
+      }
+      if (!refColumn && refCols.length) {
+        refColumn = refCols.find((c) => c.name.toLowerCase() === 'id')?.name
+          ?? refCols.find((c) => c.name === fkColumn)?.name
+          ?? ''
+      }
+
+      return { ...node, data: { ...d, inputColumns: inputCols, refColumns: refCols, fkColumn, refColumn } }
     }
 
     // ── Unnest ───────────────────────────────────────────────────────────────
